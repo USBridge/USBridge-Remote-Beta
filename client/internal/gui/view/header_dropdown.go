@@ -44,9 +44,9 @@ func (t *dropdownMenuTheme) Size(name fyne.ThemeSizeName) float32 {
 type HeaderDropdown struct {
 	widget.BaseWidget
 
-	Options    []string
-	Selected   string
-	OnSelected func(string)
+	Options          []string
+	Selected         string
+	OnSelected       func(string)
 	MinWidth         float32
 	Compact          bool
 	UltraCompact     bool
@@ -267,9 +267,15 @@ func (d *HeaderDropdown) openPopup() {
 	}
 
 	menuWidth := menu.MinSize().Width
+	if d.Size().Width > menuWidth {
+		menuWidth = d.Size().Width
+	}
 	for _, option := range d.Options {
 		label := canvas.NewText(option, design.ColorTextLight)
-		label.TextSize = 14
+		label.TextSize = d.TextSize
+		if d.UltraCompact {
+			label.TextStyle.Monospace = true
+		}
 		optionWidth := label.MinSize().Width + d.menuOptionPadding()
 		if optionWidth > menuWidth {
 			menuWidth = optionWidth
@@ -350,7 +356,7 @@ func (d *HeaderDropdown) closePopup() {
 		d.popup.Hide()
 		d.popup = nil
 	}
-	
+
 	downIcon := coloredArrowDown(d.IconColor)
 	upIcon := coloredArrowUp(d.IconColor)
 
@@ -447,6 +453,9 @@ func (d *HeaderDropdown) menuInset() float32 {
 }
 
 func (d *HeaderDropdown) menuOptionPadding() float32 {
+	if d.UltraCompact {
+		return 16
+	}
 	if d.Compact {
 		return 28
 	}
@@ -525,7 +534,7 @@ func newDropdownItem(text, secondary string, selected bool, onTap func()) *dropd
 
 func (i *dropdownItem) CreateRenderer() fyne.WidgetRenderer {
 	i.bg = canvas.NewRectangle(color.Transparent)
-	i.bg.CornerRadius = design.RadiusMD
+	i.bg.CornerRadius = 4
 	i.label = canvas.NewText(i.text, i.textColor)
 	i.label.TextSize = i.textSize
 	if i.monospace {
@@ -550,7 +559,13 @@ func (i *dropdownItem) MinSize() fyne.Size {
 	if i.monospace {
 		label.TextStyle.Monospace = true
 	}
-	width := label.MinSize().Width + 28
+
+	padding := float32(28)
+	if i.monospace {
+		padding = 16
+	}
+	width := label.MinSize().Width + padding
+
 	if i.secondary != "" {
 		secondary := canvas.NewText(i.secondary, design.ColorTextMuted)
 		secondary.TextSize = i.textSize
@@ -559,15 +574,20 @@ func (i *dropdownItem) MinSize() fyne.Size {
 		}
 		width += secondary.MinSize().Width + 18
 	}
-	if width < 72 {
-		width = 72
-	}
+
+	minWidth := float32(72)
 	height := float32(36)
-	if len(i.text) <= 4 && i.secondary == "" {
+
+	if i.monospace {
+		minWidth = 0
+		height = 24
+	} else if len(i.text) <= 4 && i.secondary == "" {
 		height = 32
-		if width < 64 {
-			width = 64
-		}
+		minWidth = 64
+	}
+
+	if width < minWidth {
+		width = minWidth
 	}
 	return fyne.NewSize(width, height)
 }
@@ -980,7 +1000,9 @@ func (r *dropdownItemRenderer) Layout(size fyne.Size) {
 	r.item.bg.Resize(size)
 	labelMin := r.item.label.MinSize()
 	labelX := float32(14)
-	if len(r.item.text) <= 4 && r.item.secondary == "" {
+	if r.item.monospace {
+		labelX = 8
+	} else if len(r.item.text) <= 4 && r.item.secondary == "" {
 		labelX = 12
 	}
 	r.item.label.Move(fyne.NewPos(labelX, (size.Height-labelMin.Height)/2))
@@ -1030,6 +1052,7 @@ var (
 	_ fyne.Tappable     = (*dropdownItem)(nil)
 	_ desktop.Hoverable = (*dropdownItem)(nil)
 )
+
 func coloredArrowDown(c color.Color) fyne.Resource {
 	if c == nil {
 		return theme.Icon(theme.IconNameArrowDropDown)

@@ -181,7 +181,7 @@ func newConnectionListRow(item ConnectionListItem, widths []float32, compact boo
 	isAgent, isKVM := ClassifyConnectionRemoteOS(data.RemoteOS)
 
 	osCell := container.NewCenter(newConnectionCardStatusIndicator(data.RemoteOS))
-	nameCell := newConnectionListNameCell(data, item.Actions.OnEdit, isAgent, isKVM)
+	nameCell := newConnectionListNameCell(data, item.Actions.OnEdit, isAgent, isKVM, highlighted)
 	stateCell := container.NewCenter(newConnectionListStateCell(isAgent, isKVM))
 
 	cells := []fyne.CanvasObject{osCell, nameCell, stateCell}
@@ -204,7 +204,7 @@ func newConnectionListRow(item ConnectionListItem, widths []float32, compact boo
 	return container.NewStack(highlightBorder, NewInset(row, 8, 8, 4, 4))
 }
 
-func newConnectionListNameCell(data ConnectionRowData, onEdit func(), isAgent, isKVM bool) fyne.CanvasObject {
+func newConnectionListNameCell(data ConnectionRowData, onEdit func(), isAgent, isKVM bool, highlighted bool) fyne.CanvasObject {
 	nameText := NewBrandText(strings.TrimSpace(data.Name), 11, design.ColorTextLight, true)
 
 	editIcon := fyne.NewStaticResource("connection-edit-title.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#c5c8b5"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zm2.92 2.33H5v-.92l9.06-9.06.92.92L5.92 19.58zM20.71 7.04a1.003 1.003 0 0 0 0-1.42L18.37 3.29a1.003 1.003 0 0 0-1.42 0l-1.13 1.13 3.75 3.75 1.14-1.13z"/></svg>`))
@@ -217,6 +217,10 @@ func newConnectionListNameCell(data ConnectionRowData, onEdit func(), isAgent, i
 		ButtonSize: fyne.NewSize(16, 16),
 		OnTapped:   onEdit,
 	})
+
+	if highlighted {
+		editBtn.Hide()
+	}
 
 	nameRow := container.New(&DeviceRowControlsLayout{Gap: 6}, nameText, editBtn)
 

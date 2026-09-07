@@ -57,11 +57,10 @@ func (mw *MainWindow) showConnectionManager() {
 		if mw.connectionManager != nil {
 			mw.connectionManager.RefreshList()
 		}
-		mw.window.SetContent(mw.connectionContent)
-		if content := mw.window.Content(); content != nil {
-			content.Refresh()
-			mw.window.Canvas().Refresh(content)
-		}
+		mw.window.SetContent(mw.wrapWithResizeGuard(mw.connectionContent))
+		mw.onMainContent = false
+		mw.connectionContent.Refresh()
+		mw.window.Canvas().Refresh(mw.connectionContent)
 		mw.syncVideoOverlayForNav()
 		mw.syncAudioMuteForNav()
 	})
@@ -74,11 +73,10 @@ func (mw *MainWindow) showMainContent() {
 			logrus.Warn("showMainContent: mainContent is nil")
 			return
 		}
-		mw.window.SetContent(mw.mainContent)
-		if content := mw.window.Content(); content != nil {
-			content.Refresh()
-			mw.window.Canvas().Refresh(content)
-		}
+		mw.window.SetContent(mw.wrapWithResizeGuard(mw.mainContent))
+		mw.onMainContent = true
+		mw.mainContent.Refresh()
+		mw.window.Canvas().Refresh(mw.mainContent)
 		mw.updateDeviceButtonsVisibility()
 		mw.syncVideoOverlayForNav()
 		mw.syncAudioMuteForNav()
@@ -100,7 +98,7 @@ func (mw *MainWindow) syncAudioMuteForNav() {
 	if !ok {
 		return
 	}
-	onConnectionManager := mw.window.Content() == mw.connectionContent
+	onConnectionManager := !mw.onMainContent
 
 	if onConnectionManager && !ms.GetAudioMuted() {
 		ms.SetAudioMuted(true)
@@ -133,7 +131,7 @@ func (mw *MainWindow) syncVideoOverlayForNav() {
 		return
 	}
 	shouldBeVisible := mw.tabs != nil &&
-		mw.window.Content() == mw.mainContent &&
+		mw.onMainContent &&
 		mw.tabs.SelectedIndex() == mw.controlTabIndex()
 
 	// Drift-proof nav signal for wasm (see view.NavVideoHidden's doc

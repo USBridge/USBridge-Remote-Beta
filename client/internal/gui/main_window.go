@@ -124,6 +124,22 @@ type MainWindow struct {
 	// or during that screen.
 	audioMutedByNav bool
 	onReadyCallback          func()
+
+	// lastGoodWindowSize/resizeGuardPending back the windowResizeGuard
+	// workaround (main_window_resize_guard.go) for a real Windows-only
+	// Fyne/GLFW bug: minimizing then restoring this window can snap it
+	// down to its content's bare MinSize instead of its actual prior size.
+	lastGoodWindowSize fyne.Size
+	resizeGuardPending bool
+
+	// onMainContent tracks which screen is showing (true: mainContent,
+	// false: connectionContent) -- syncVideoOverlayForNav/syncAudioMuteForNav
+	// used to tell this apart via `mw.window.Content() == mw.mainContent`,
+	// which broke once SetContent started wrapping content in
+	// wrapWithResizeGuard (window.Content() then returns that wrapper, never
+	// mw.mainContent/mw.connectionContent themselves). Zero value (false)
+	// matches the real startup order: connectionContent is shown first.
+	onMainContent bool
 }
 
 func NewMainWindow(cfg *models.AppConfig) *MainWindow {

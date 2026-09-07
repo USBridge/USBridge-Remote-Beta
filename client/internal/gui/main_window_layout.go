@@ -389,7 +389,8 @@ func (mw *MainWindow) recreateContainers() {
 		),
 	)
 
-	mw.window.SetContent(mw.connectionContent)
+	mw.window.SetContent(mw.wrapWithResizeGuard(mw.connectionContent))
+	mw.onMainContent = false
 }
 
 func (mw *MainWindow) applyTabVisualState(activeIndex int) {

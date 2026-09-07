@@ -57,24 +57,30 @@ type Config struct {
 	DBNetONNXPath string
 	SVTRONNXPath  string
 	SharedLibPath string // path to libonnxruntime.so; "" uses the system default search path
-	UseGPU        bool   // try OpenVINO GPU EP for icon_detect+dbnet (SVTR stays CPU -- see NewParser)
+	UseGPU        bool   // try an accelerator EP for icon_detect+dbnet -- CoreML/DirectML/OpenVINO depending on GOOS, see acceleratorEP (SVTR stays CPU on darwin -- see NewParser)
 }
 
 // NewParser loads all three ONNX models. icon_detect and dbnet try an
 // accelerator EP when Config.UseGPU is set (acceleratorEP -- CoreML on
-// macOS, OpenVINO GPU elsewhere): both are plain conv nets and benchmarked
-// (USBRIDGE_LOCALUI_DEBUG=1, cmd/localui_bench, M1 Air) at a large win on
-// CoreML -- icon_detect infer+decode ~800-1090ms -> ~90-340ms, dbnet's 12
-// tiles ~4.0s -> ~1.6-2.3s total.
+// macOS, DirectML on Windows, OpenVINO GPU on Linux): all plain conv nets
+// and benchmarked at a large win on every platform tried so far --
+// (USBRIDGE_LOCALUI_DEBUG=1, cmd/localui_bench, M1 Air) CoreML:
+// icon_detect infer+decode ~800-1090ms -> ~90-340ms, dbnet's 12 tiles
+// ~4.0s -> ~1.6-2.3s total; (same tool, Windows box w/ RTX 3090 + Radeon
+// 780M, 1280x800 single-tile frame) DirectML: icon_detect infer
+// ~283-322ms -> ~98-104ms, dbnet ~211-246ms -> ~96-102ms.
 //
 // SVTR is deliberately NOT given useGPU on darwin: the same benchmark run
 // showed batched CoreML SVTR at ~150-165ms/crop vs. batched CPU's
 // ~30-35ms/crop -- a ~5x REGRESSION, not a win (CoreML's per-batch dispatch
 // overhead for this model's varying batch shapes swamps whatever the ANE/GPU
-// saves on the compute itself). Non-darwin keeps the OpenVINO GPU attempt
-// for SVTR too -- that path's batch=16 win was benchmarked for real
-// (batchedSession's doc comment) and this hasn't been re-tested against
-// CoreML's regression, so there's no evidence to change it there.
+// saves on the compute itself). Non-darwin keeps the GPU EP attempt for SVTR
+// too: OpenVINO's batch=16 win was benchmarked for real (batchedSession's
+// doc comment) and hasn't been re-tested against CoreML's regression, so
+// there's no evidence to change it there; DirectML's SVTR win was directly
+// benchmarked instead of assumed -- same Windows run above, batched SVTR
+// dropped from CPU's ~17-20ms/crop to DirectML's ~6.3-6.9ms/crop, no
+// CoreML-style regression on this GPU stack.
 func NewParser(cfg Config) (*Parser, error) {
 	if err := initRuntime(cfg.SharedLibPath); err != nil {
 		return nil, fmt.Errorf("init onnxruntime: %w", err)

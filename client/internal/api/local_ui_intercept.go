@@ -14,7 +14,8 @@ import (
 // proxy answers the ui.parse tool call itself instead of forwarding it to
 // the device -- running the same three-model pipeline (YOLOv8 icon
 // detector + DBNet text detector + SVTR text recognizer) locally via ONNX
-// Runtime on this machine's CPU/Intel iGPU instead of the device's RK3566
+// Runtime on this machine's CPU or GPU (CoreML/DirectML/OpenVINO, see
+// internal/localui/onnx.go's acceleratorEP) instead of the device's RK3566
 // NPU. It still fetches the raw screenshot from the device (screen.get_image
 // is cheap -- no OCR/YOLO runs on the device for that call, see that tool's
 // description), only the expensive detection/recognition work moves local.
@@ -22,7 +23,7 @@ import (
 // This exists because ui.parse at 1920x1080 tiles DBNet into 6 native-
 // resolution passes on the device's single-core NPU (~20s end to end, see
 // mcpProxyTimeout's doc comment); the same models on this machine's CPU or
-// OpenVINO GPU EP finish in well under 5s (see internal/localui's package
+// an accelerator EP finish in well under 5s (see internal/localui's package
 // doc comment and its benchmarked numbers).
 //
 // Every other MCP tool (including ui.parse's own tools/list entry) is

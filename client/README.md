@@ -139,21 +139,38 @@ agent-driven UI automation) normally runs on the device's RK3566 NPU,
 which tiles text detection into several passes at 1080p and can take
 ~20s. On a machine with a real CPU/GPU, the same three ONNX models
 (icon detector + DBNet + SVTR) can run locally in well under 5s instead,
-via ONNX Runtime (with the OpenVINO execution provider on Intel iGPUs).
+via ONNX Runtime — accelerated with CoreML on macOS, DirectML on Windows
+(any NVIDIA/AMD/Intel GPU, no vendor SDK needed), or OpenVINO on Linux
+(Intel iGPUs); see `internal/localui/onnx.go`'s `acceleratorEP`.
 
-A packaged macOS build (`scripts/build_macos.sh`) already bundles a
-redistributable ONNX Runtime + the models straight into the `.app` —
-turning on `local_ui_parse_enabled` just works, no per-machine setup, no
-Homebrew (see `scripts/fetch_onnxruntime.sh`). `build_linux.sh` /
-`build_windows.sh` bundle the same way but that path isn't independently
-verified on real Linux/Windows machines yet. Building from source, or on
-a platform not bundling yet, run the setup script once instead:
+A packaged macOS or Windows build (`scripts/build_macos.sh` /
+`build_windows.sh`) already bundles a redistributable ONNX Runtime (+
+DirectML.dll on Windows) + the models straight into the app — turning on
+`local_ui_parse_enabled` just works, no per-machine setup (see
+`scripts/fetch_onnxruntime.sh`). The Windows/DirectML path is
+independently verified: benchmarked live on an NVIDIA RTX 3090 + AMD Radeon
+780M iGPU dev box, a ~2.5x end-to-end win over CPU (see
+`internal/localui/onnx.go`'s `acceleratorEP` doc comment for exact
+numbers) with DirectML correctly binding to the discrete GPU. `build_linux.sh`
+bundles the same way but that path isn't independently verified on a real
+Linux machine yet. Building from source (`go run`/`go build` instead of a
+packaged app), fetch the runtime lib once instead -- the ONNX models are
+already committed at `internal/localui/models/`, only the ONNX Runtime
+shared library itself needs fetching:
 
 ```bash
-./scripts/setup_localui.sh                # once per machine: fetches models + runtime libs into ~/.usbridge/localui
+./scripts/fetch_onnxruntime.sh ~/.usbridge/localui/runtime   # once per machine, any OS: onnxruntime.dll/.so/.dylib (+ DirectML.dll on Windows)
+mkdir -p ~/.usbridge/localui/models && cp internal/localui/models/*.onnx ~/.usbridge/localui/models/
 # then enable it in your config:
 #   "local_ui_parse_enabled": true
 ```
+
+`./scripts/setup_localui.sh` is a separate, heavier script for Linux dev
+machines specifically: it additionally installs the OpenVINO execution
+provider (`onnxruntime-openvino`, Intel iGPU only) and re-exports the three
+models from their original PaddleOCR/ultralytics sources via Docker+
+paddle2onnx -- only needed to regenerate the models after an upstream
+update, not for normal local-offload setup on any platform.
 
 When enabled, the MCP proxy (`internal/api/mcp_proxy.go`) answers
 `ui.parse` itself instead of forwarding to the device — see

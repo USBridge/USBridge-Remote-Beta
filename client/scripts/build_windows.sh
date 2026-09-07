@@ -470,7 +470,12 @@ cp "$BUILD_CACHE_APP_EXE" "$DIST_WIN_BIN/$APP_EXE_NAME"
 # an optional accelerator, never a hard dependency of the build.
 echo -e "${YELLOW}Bundling local ui.parse (ONNX Runtime + models) for AI Vision...${NC}"
 ORT_CACHE_DIR="$REPO_ROOT/.build-cache/onnxruntime-windows"
-if [ ! -f "$ORT_CACHE_DIR/onnxruntime.dll" ]; then
+# Also re-fetch if DirectML.dll is missing -- guards a stale local cache dir
+# from before fetch_onnxruntime.sh started bundling it (CPU-only
+# onnxruntime.dll present, DirectML.dll never fetched, so the plain
+# onnxruntime.dll-only check below would otherwise skip re-fetching forever
+# on a dev machine that built this before that change).
+if [ ! -f "$ORT_CACHE_DIR/onnxruntime.dll" ] || [ ! -f "$ORT_CACHE_DIR/DirectML.dll" ]; then
     "$SCRIPTS_DIR/fetch_onnxruntime.sh" "$ORT_CACHE_DIR" windows || true
 fi
 if [ -f "$ORT_CACHE_DIR/onnxruntime.dll" ]; then
@@ -478,6 +483,19 @@ if [ -f "$ORT_CACHE_DIR/onnxruntime.dll" ]; then
     echo -e "${GREEN}✓${NC} bin/onnxruntime.dll"
 else
     echo -e "${YELLOW}⚠${NC} Could not fetch onnxruntime.dll -- local ui.parse/AI Vision will stay unavailable in this build"
+fi
+# DirectML.dll (GPU execution provider, NVIDIA/AMD/Intel alike -- see
+# internal/localui/onnx.go's acceleratorEP): fetch_onnxruntime.sh drops this
+# next to onnxruntime.dll on windows; without it, onnx.go's
+# AppendExecutionProviderDirectML call fails at runtime and everything
+# silently falls back to CPU, same "degrade, don't hard-fail" pattern as a
+# missing onnxruntime.dll above -- so this is non-fatal too, just a weaker
+# build.
+if [ -f "$ORT_CACHE_DIR/DirectML.dll" ]; then
+    cp -L "$ORT_CACHE_DIR/DirectML.dll" "$DIST_WIN_BIN/DirectML.dll"
+    echo -e "${GREEN}✓${NC} bin/DirectML.dll"
+else
+    echo -e "${YELLOW}⚠${NC} Could not fetch DirectML.dll -- local ui.parse/AI Vision will run CPU-only (no GPU accel) in this build"
 fi
 LOCALUI_MODELS_SRC="$REPO_ROOT/internal/localui/models"
 if [ -f "$LOCALUI_MODELS_SRC/icon_detect.onnx" ]; then

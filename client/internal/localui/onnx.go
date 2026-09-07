@@ -2,7 +2,9 @@ package localui
 
 import (
 	"fmt"
+	"os"
 	"runtime"
+	"strconv"
 	"sync"
 
 	ort "github.com/yalue/onnxruntime_go"
@@ -68,17 +70,60 @@ type session struct {
 // per-call overhead (see batchedSession's doc comment), so it's still worth
 // trying. MLComputeUnits=ALL lets Core ML place each op on whichever of
 // ANE/GPU/CPU it estimates fastest, rather than pinning everything to one.
+//
+// Windows had the exact same "GPU checkbox does nothing" bug CoreML fixed on
+// macOS: fetch_onnxruntime.sh only ever fetched the plain CPU-only PyPI
+// wheel, and the OpenVINO EP this function tried unconditionally on every
+// non-darwin OS needs onnxruntime_providers_openvino.dll + a real OpenVINO
+// runtime install -- neither ships on Windows, so AppendExecutionProviderOpenVINO
+// always errored and silently fell through to CPU, exactly as intended for a
+// missing-but-optional accelerator, just never actually accelerating anything
+// there. DirectML is the fix: it's a DirectX 12 execution provider, vendor-
+// agnostic (works on NVIDIA/AMD/Intel GPUs alike through the one D3D12 driver
+// every GPU on Windows already has), and needs no separate vendor SDK -- just
+// the onnxruntime.dll + DirectML.dll pair from the "onnxruntime-directml"
+// PyPI wheel (see fetch_onnxruntime.sh's windows branch) sitting next to each
+// other. Benchmarked live on this dev box's dual-GPU setup (NVIDIA RTX 3090 +
+// AMD Radeon 780M iGPU, USBRIDGE_LOCALUI_DEBUG=1, cmd/localui_bench -gpu,
+// 1280x800 screenshot, warm runs): CPU EP totaled ~1.08-1.15s/parse
+// (icon_detect infer ~283-322ms, dbnet ~211-246ms, svtr ~17-20ms/crop);
+// DirectML on the RTX 3090 (see directmlDeviceID) totaled ~430-460ms/parse
+// (icon_detect infer ~98-104ms, dbnet ~96-102ms, svtr ~6.3-6.9ms/crop) -- a
+// ~2.5x end-to-end win, same shape as CoreML's on Apple Silicon, confirmed
+// via `nvidia-smi` showing GPU 0 utilization jump to 34-53% and ~3GB VRAM
+// allocated for the process's duration while the AMD iGPU stayed idle.
+//
+// AMD's Ryzen AI NPU (the XDNA "NPU Compute Accelerator Device" this same
+// 780M-equipped chip also exposes -- confirmed present via `Get-PnpDevice`,
+// PCI\VEN_1022&DEV_1502) is deliberately NOT attempted here. DirectML only
+// ever targets a D3D12 GPU device, never that NPU; reaching the NPU needs
+// AMD's separate Ryzen AI Software SDK (the onnxruntime-vitisai EP + AMD's
+// proprietary "VOE" runtime + Windows NPU driver, not just the generic
+// Microsoft-provided one this box currently has) plus INT8-requantizing all
+// three models through AMD's vai_q_onnx quantizer -- a materially bigger,
+// separately-versioned pipeline than "fetch a redistributable wheel", closer
+// in shape to setup_localui.sh's whole paddle2onnx export step than to a
+// switch statement here. Left as a documented follow-up rather than half-
+// wired in unverified.
 func acceleratorEP(opts *ort.SessionOptions, useGPU bool) string {
 	if !useGPU {
 		return ""
 	}
-	if runtime.GOOS == "darwin" {
+	switch runtime.GOOS {
+	case "darwin":
 		if err := opts.AppendExecutionProviderCoreMLV2(map[string]string{
 			"MLComputeUnits": "ALL",
 		}); err == nil {
 			return "coreml"
 		}
 		return ""
+	case "windows":
+		if err := opts.AppendExecutionProviderDirectML(directmlDeviceID()); err == nil {
+			return "directml"
+		}
+		// Falls through to the OpenVINO attempt below for the rare Windows
+		// box that has an OpenVINO runtime installed (setup_localui.sh-style
+		// manual setup) but no DirectML.dll bundled next to onnxruntime.dll.
 	}
 	if err := opts.AppendExecutionProviderOpenVINO(map[string]string{
 		"device_type": "GPU",
@@ -86,6 +131,29 @@ func acceleratorEP(opts *ort.SessionOptions, useGPU bool) string {
 		return "openvino"
 	}
 	return ""
+}
+
+// directmlDeviceID picks which D3D12 adapter DirectML should bind to.
+// AppendExecutionProviderDirectML's device_id is a plain index into
+// EnumAdapters1 order, not a "give me the fastest one" request -- on a
+// machine with more than one GPU (like this dev box's discrete RTX 3090 +
+// integrated Radeon 780M) that order is whatever DXGI enumerates, which is
+// conventionally-but-not-guaranteed-by-spec the primary/highest-performance
+// adapter first. USBRIDGE_LOCALUI_DML_DEVICE overrides it for a box where
+// that assumption is wrong (e.g. an external display wired to the iGPU,
+// which can flip DXGI's enumeration order) without needing a code change --
+// matches USBRIDGE_LOCALUI_DEBUG's env-var-escape-hatch pattern elsewhere in
+// this package. Verified on this box via `nvidia-smi --query-gpu=utilization.gpu,memory.used`
+// polled during a sustained cmd/localui_bench -gpu run: device 0 drove the
+// RTX 3090 to 34-53% utilization and ~3GB VRAM for the run's duration, while
+// the 780M iGPU was never touched.
+func directmlDeviceID() int {
+	if v := os.Getenv("USBRIDGE_LOCALUI_DML_DEVICE"); v != "" {
+		if id, err := strconv.Atoi(v); err == nil && id >= 0 {
+			return id
+		}
+	}
+	return 0
 }
 
 // newSession loads onnxPath and builds a session for a fixed input/output

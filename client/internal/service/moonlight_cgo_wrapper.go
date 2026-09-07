@@ -44,6 +44,7 @@ import (
 
 	"github.com/sirupsen/logrus"
 
+	usbapi "usbridge-client/internal/api"
 	"usbridge-client/internal/models"
 )
 
@@ -549,6 +550,12 @@ func goAIVisionOverlay(rgba *C.uint8_t, width, height, stride C.int) {
 //
 //export goAIVisionShouldSample
 func goAIVisionShouldSample() C.int {
+	// A pending live-frame request (see internal/api/live_frame.go) needs
+	// this frame regardless of the checkbox/pacing below -- it's a
+	// one-shot, independent consumer of the same sample.
+	if usbapi.LiveFrameWanted() {
+		return 1
+	}
 	if !aiVisionEnabled.Load() || aiVisionBusy.Load() {
 		return 0
 	}
@@ -573,11 +580,12 @@ func goAIVisionSample(rgba *C.uint8_t, width, height, stride C.int) {
 	if rgba == nil || width <= 0 || height <= 0 || stride <= 0 {
 		return
 	}
+	w, h, s := int(width), int(height), int(stride)
+	buf := unsafe.Slice((*byte)(unsafe.Pointer(rgba)), s*h)
+	maybeServeLiveFrame(buf, w, h, s)
 	if !aiVisionEnabled.Load() {
 		return
 	}
-	w, h, s := int(width), int(height), int(stride)
-	buf := unsafe.Slice((*byte)(unsafe.Pointer(rgba)), s*h)
 	maybeKickDetection(buf, w, h, s)
 }
 

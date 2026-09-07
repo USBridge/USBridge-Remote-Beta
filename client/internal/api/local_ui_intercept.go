@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"usbridge-client/internal/localui"
 )
@@ -137,7 +138,7 @@ func tryLocalUIParse(client *USBClient, reqBody []byte) (respBody []byte, handle
 		return nil, false, nil
 	}
 
-	imgBytes, err := fetchScreenImage(client)
+	imgBytes, err := screenImageForLocalParse(client)
 	if err != nil {
 		return nil, true, fmt.Errorf("local ui.parse: fetch screen.get_image from device: %w", err)
 	}
@@ -166,6 +167,31 @@ func tryLocalUIParse(client *USBClient, reqBody []byte) (respBody []byte, handle
 		return nil, true, fmt.Errorf("local ui.parse: marshal response: %w", err)
 	}
 	return body, true, nil
+}
+
+// liveFrameWaitTimeout bounds how long screenImageForLocalParse waits for
+// the video decode path to hand over a frame (see live_frame.go) before
+// giving up and falling back to a device round-trip. Long enough that a
+// live session (frames arriving every 8-16ms at 60-120fps) always wins the
+// race; short enough that calling ui.parse with no video session open
+// (a perfectly normal, headless MCP-agent use case) doesn't add a
+// noticeable stall before it falls back to fetchScreenImage.
+const liveFrameWaitTimeout = 300 * time.Millisecond
+
+// screenImageForLocalParse gets the screenshot local ui.parse decodes,
+// preferring a frame the video decode path is already producing (no extra
+// network round-trip or device-side capture) over fetchScreenImage's full
+// device round-trip. Only ever skips the device entirely when a video
+// session is actively streaming AND the operator is looking at it in the
+// GUI right now -- with no video session open (the common case for a
+// headless/background MCP agent), RequestLiveFrame just times out after
+// liveFrameWaitTimeout and this falls back to fetchScreenImage exactly as
+// before this existed.
+func screenImageForLocalParse(client *USBClient) ([]byte, error) {
+	if png, ok := RequestLiveFrame(liveFrameWaitTimeout); ok {
+		return png, nil
+	}
+	return fetchScreenImage(client)
 }
 
 // fetchScreenImage calls the device's screen.get_image MCP tool and

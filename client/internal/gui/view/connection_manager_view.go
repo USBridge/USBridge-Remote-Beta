@@ -75,6 +75,13 @@ type ConnectionRowData struct {
 type ConnectionRowState struct {
 	Disabled bool
 	Loading  bool
+	// Editing puts a Grid-mode card (NewConnectionGridCard) into its inline
+	// edit layout -- Name/LAN/TS/Token become entries, the protocol
+	// picker/Connect button swap for Save/Delete icon buttons, and the
+	// platform chip row hides to make room. List rows (NewConnectionRow)
+	// ignore this field; List's pencil still opens the modal editor
+	// (ConnectionManager.showEditDialog) regardless of it.
+	Editing bool
 }
 
 type ConnectionRowActions struct {

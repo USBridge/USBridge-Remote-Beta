@@ -1307,6 +1307,7 @@ func (cm *ConnectionManager) handleDeleteConnection(idx int, afterDelete func())
 			})
 			cm.connections = append(cm.connections[:idx], cm.connections[idx+1:]...)
 			cm.selectedIndex = -1
+			cm.editingGridIndex = -1
 			cm.saveConnections()
 			fyne.Do(func() {
 				cm.applyConnectionToForm("", "", "")

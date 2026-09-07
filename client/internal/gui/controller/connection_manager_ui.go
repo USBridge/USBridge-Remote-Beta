@@ -8,6 +8,7 @@ import (
 	"usbridge-client/internal/models"
 
 	"fyne.io/fyne/v2"
+	"github.com/sirupsen/logrus"
 )
 
 func (cm *ConnectionManager) createInterface() {
@@ -228,6 +229,7 @@ func (cm *ConnectionManager) createConnectionGridCard(conn SavedConnection, idx 
 	rowState := view.ConnectionRowState{
 		Disabled: cm.connectionPending,
 		Loading:  cm.connectionPending && cm.activeConnectionIndex == idx,
+		Editing:  cm.editingGridIndex == idx,
 	}
 
 	fillForm := func() {
@@ -246,6 +248,7 @@ func (cm *ConnectionManager) createConnectionGridCard(conn SavedConnection, idx 
 			RemoteOS:         conn.RemoteOS,
 			LANAddress:       internalHost,
 			TailscaleAddress: tailscaleHost,
+			MasterKey:        conn.MasterKey,
 			ProtocolBadge:    connectionProtocolBadge(conn.Protocol),
 			ProtocolOptions: []string{
 				connectionProtocolBadge(models.ConnectionProtocolAuto),
@@ -260,7 +263,27 @@ func (cm *ConnectionManager) createConnectionGridCard(conn SavedConnection, idx 
 				if cm.connectionPending {
 					return
 				}
-				cm.showEditDialog(idx)
+				// Grid's pencil edits the card in place instead of opening
+				// the modal (List's showEditDialog stays modal -- see
+				// createConnectionRow's own OnEdit above).
+				cm.editingGridIndex = idx
+				fyne.Do(func() {
+					cm.refreshConnectionsList()
+				})
+			},
+			OnSave: func(name, lanAddress, tailscaleAddress, masterKey string) {
+				cm.saveGridCardEdit(idx, name, lanAddress, tailscaleAddress, masterKey)
+			},
+			OnDelete: func() {
+				cm.handleDeleteConnection(idx, nil)
+			},
+			OnCancel: func() {
+				// Discard the in-progress edit and go back to the normal
+				// card layout -- no validation, no save.
+				cm.editingGridIndex = -1
+				fyne.Do(func() {
+					cm.refreshConnectionsList()
+				})
 			},
 			OnUse: func() {
 				if !cm.beginConnectionFromRow(idx) {
@@ -287,6 +310,45 @@ func (cm *ConnectionManager) createConnectionGridCard(conn SavedConnection, idx 
 			},
 		},
 	)
+}
+
+// saveGridCardEdit commits a Grid card's inline edit (ConnectionCardActions.
+// OnSave) -- same validation/merge shape as the modal editor's onSave
+// (showEditDialog in connection_manager_dialogs.go), just without the
+// Tailscale-register toggle the compact card has no room for, and without a
+// bool return since the card has nowhere to surface a "rejected" state --
+// an invalid save just leaves the card in edit mode instead.
+func (cm *ConnectionManager) saveGridCardEdit(idx int, name, internalHost, tailscaleHost, masterKey string) {
+	if idx < 0 || idx >= len(cm.connections) {
+		return
+	}
+	name = strings.TrimSpace(name)
+	internalHost = strings.TrimSpace(internalHost)
+	tailscaleHost = strings.TrimSpace(tailscaleHost)
+	if name == "" || (internalHost == "" && tailscaleHost == "") {
+		logrus.Warn("name and at least one address are required")
+		return
+	}
+
+	conn := cm.connections[idx]
+	cm.connections[idx] = SavedConnection{
+		Name:              name,
+		InternalHost:      internalHost,
+		TailscaleHost:     tailscaleHost,
+		Host:              fallbackText(internalHost, tailscaleHost),
+		MasterKey:         strings.TrimSpace(masterKey),
+		Protocol:          conn.Protocol,
+		TailscaleRegister: conn.TailscaleRegister,
+		RemoteOS:          conn.RemoteOS,
+	}
+	cm.selectedIndex = idx
+	cm.editingGridIndex = -1
+	cm.saveConnections()
+	fyne.Do(func() {
+		cm.SelectConnection(idx)
+		cm.refreshConnectionsList()
+	})
+	logrus.Infof("Updated connection: %s", name)
 }
 
 func (cm *ConnectionManager) updateConnectionProtocol(idx int, protocol string) {

@@ -52,6 +52,13 @@ type ConnectionManager struct {
 	activeConnectionIndex int
 	syncingForm           bool
 
+	// editingGridIndex is the connections slice index of the Grid-mode card
+	// currently showing its inline edit layout (see
+	// connection_grid_card.go's ConnectionRowState.Editing), or -1 when no
+	// card is being edited. List mode ignores this entirely -- its pencil
+	// always opens the modal editor (showEditDialog).
+	editingGridIndex int
+
 	hostEntry      *widget.Entry
 	masterKeyEntry *widget.Entry
 	protocolSelect *widget.Select
@@ -162,6 +169,7 @@ func NewConnectionManager(app fyne.App, window fyne.Window, config *models.AppCo
 		selectedIndex:         -1,
 		connections:           make([]SavedConnection, 0),
 		activeConnectionIndex: -1,
+		editingGridIndex:      -1,
 		ts:                    ts,
 	}
 	if cm.ts == nil {

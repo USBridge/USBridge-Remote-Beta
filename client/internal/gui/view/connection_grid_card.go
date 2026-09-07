@@ -171,7 +171,7 @@ func NewConnectionGridCard(data ConnectionCardData, state ConnectionRowState, ac
 	var statsBox fyne.CanvasObject
 	var lanEntry, tailscaleEntry, tokenEntry *widget.Entry
 	if editing {
-		statsBox, lanEntry, tailscaleEntry, tokenEntry = NewConnectionCardEditableStatsBox(data.LANAddress, data.TailscaleAddress, data.MasterKey, 160)
+		statsBox, _, lanEntry, tailscaleEntry, tokenEntry = NewConnectionCardEditableStatsBox(false, "", data.LANAddress, data.TailscaleAddress, data.MasterKey, 160)
 	} else {
 		statsBox = newConnectionCardStatsBox(data.LANAddress, data.TailscaleAddress)
 	}
@@ -584,11 +584,17 @@ func wrapGridCardEntry(entry *widget.Entry, textSize float32, textColor color.Co
 // Exported so the Add Connection dialog (controller package) can reuse the
 // exact same box/entries/copy-paste styling this Grid card and List's
 // split-edit panel already share, rather than a third hand-rolled
-// look-alike -- entryWidth is that dialog's one real difference from the
-// other two: it's wide enough that the fixed-160px right-anchored entry
-// those use would leave a large empty gap before it, so it passes 0 (fill
-// available width) instead.
-func NewConnectionCardEditableStatsBox(lanAddress, tailscaleAddress, masterKey string, entryWidth float32) (box fyne.CanvasObject, lanEntry, tailscaleEntry, tokenEntry *widget.Entry) {
+// look-alike:
+//   - entryWidth is that dialog's one real size difference from the other
+//     two: it's wide enough that the fixed-160px right-anchored entry those
+//     use would leave a large empty gap before it, so it passes 0 (fill
+//     available width) instead.
+//   - includeName/name add a Name row ahead of LAN, for that same dialog --
+//     Grid's inline edit and List's split-edit panel already have their own
+//     separate Name row above this box entirely (their own topRow, a
+//     different look), so both pass includeName=false and get a nil
+//     nameEntry back, same as if this parameter didn't exist for them.
+func NewConnectionCardEditableStatsBox(includeName bool, name, lanAddress, tailscaleAddress, masterKey string, entryWidth float32) (box fyne.CanvasObject, nameEntry, lanEntry, tailscaleEntry, tokenEntry *widget.Entry) {
 	lanEntry = newConnectionCardFieldEntry(lanAddress, "LAN address")
 	tailscaleEntry = newConnectionCardFieldEntry(tailscaleAddress, "Tailscale address")
 	tokenEntry = newConnectionCardFieldEntry(masterKey, "Token")
@@ -597,17 +603,25 @@ func NewConnectionCardEditableStatsBox(lanAddress, tailscaleAddress, masterKey s
 
 	tsValueColor := color.NRGBA{R: 0xeb, G: 0xff, B: 0xbc, A: 0xff}
 
-	lanRow := newConnectionStatEditRow("LAN", lanEntry, 10, design.ColorTextLight, false, entryWidth)
-	tsRow := newConnectionStatEditRow("TS", tailscaleEntry, 10, tsValueColor, false, entryWidth)
-	tokenRow := newConnectionStatEditRow("Token", tokenEntry, 8, design.ColorTextLight, true, entryWidth)
-
 	dividerColor := color.NRGBA{R: 0x29, G: 0x2d, B: 0x27, A: 0xff}
-	sep1 := canvas.NewRectangle(dividerColor)
-	sep1.SetMinSize(fyne.NewSize(1, 1))
-	sep2 := canvas.NewRectangle(dividerColor)
-	sep2.SetMinSize(fyne.NewSize(1, 1))
+	newSep := func() fyne.CanvasObject {
+		sep := canvas.NewRectangle(dividerColor)
+		sep.SetMinSize(fyne.NewSize(1, 1))
+		return sep
+	}
 
-	rows := []fyne.CanvasObject{lanRow, sep1, tsRow, sep2, tokenRow}
+	var rows []fyne.CanvasObject
+	if includeName {
+		nameEntry = newConnectionCardFieldEntry(name, "Name")
+		// No copy/paste actions on Name (last "false" below) -- nothing
+		// about a connection's own name benefits from that the way an
+		// address or key does.
+		rows = append(rows, newConnectionStatEditRow("Name", nameEntry, 10, design.ColorTextLight, false, entryWidth, false), newSep())
+	}
+	lanRow := newConnectionStatEditRow("LAN", lanEntry, 10, design.ColorTextLight, false, entryWidth, true)
+	tsRow := newConnectionStatEditRow("TS", tailscaleEntry, 10, tsValueColor, false, entryWidth, true)
+	tokenRow := newConnectionStatEditRow("Token", tokenEntry, 8, design.ColorTextLight, true, entryWidth, true)
+	rows = append(rows, lanRow, newSep(), tsRow, newSep(), tokenRow)
 
 	bg := canvas.NewRectangle(design.ColorGray950)
 	bg.CornerRadius = 6
@@ -615,7 +629,7 @@ func NewConnectionCardEditableStatsBox(lanAddress, tailscaleAddress, masterKey s
 	bg.StrokeWidth = 1
 
 	box = container.NewStack(bg, NewInset(container.New(&tightStatsVBoxLayout{Gap: 4}, rows...), 12, 12, 4, 4))
-	return box, lanEntry, tailscaleEntry, tokenEntry
+	return box, nameEntry, lanEntry, tailscaleEntry, tokenEntry
 }
 
 func newConnectionCardFieldEntry(value, placeholder string) *widget.Entry {
@@ -686,7 +700,15 @@ func newGridCardFieldActions(entry *widget.Entry) fyne.CanvasObject {
 // whatever room is left instead (NewConnectionCardEditableStatsBox's dialog
 // caller, which has plenty of room and would otherwise leave a large gap
 // between the label and a fixed-160px entry).
-func newConnectionStatEditRow(label string, entry *widget.Entry, textSize float32, textColor color.Color, stackedActions bool, width float32) fyne.CanvasObject {
+// connectionStatEditRowLabelWidth is every row's label column width in a
+// stats box (LAN/TS/Token, and Name when included) -- fixed rather than
+// each label's own natural width, which varies ("Token" is nearly twice
+// "TS"'s width), so without this the entry box next to it started at a
+// different X per row instead of all lining up. Sized to fit the widest
+// label ("Token") at the shared 10px monospace labels render at.
+var connectionStatEditRowLabelWidth = fyne.MeasureText("Token", 10, fyne.TextStyle{Monospace: true}).Width
+
+func newConnectionStatEditRow(label string, entry *widget.Entry, textSize float32, textColor color.Color, stackedActions bool, width float32, showActions bool) fyne.CanvasObject {
 	c5c8b5Color := color.NRGBA{R: 0xc5, G: 0xc8, B: 0xb5, A: 0xff}
 	labelText := canvas.NewText(label, c5c8b5Color)
 	labelText.TextSize = 10
@@ -694,12 +716,22 @@ func newConnectionStatEditRow(label string, entry *widget.Entry, textSize float3
 
 	entry.TextStyle.Monospace = true
 
-	actions := container.NewCenter(newGridCardFieldActions(entry))
+	labelSpacer := canvas.NewRectangle(color.Transparent)
+	labelSpacer.SetMinSize(fyne.NewSize(connectionStatEditRowLabelWidth, 1))
+	labelCol := container.NewStack(labelSpacer, NewInset(labelText, 0, 8, 0, 0))
+
+	// showActions is false for Name (see NewConnectionCardEditableStatsBox)
+	// -- nothing to copy/paste there the way an address or key benefits
+	// from.
+	var actionsCol fyne.CanvasObject
+	if showActions {
+		actionsCol = container.NewCenter(newGridCardFieldActions(entry))
+	}
 
 	// Use a fixed width for the input and push it to the right so it looks aligned
 	wrapped := container.New(&rightAlignedInputLayout{Width: width}, wrapGridCardEntry(entry, textSize, textColor))
 
-	return container.NewBorder(nil, nil, NewInset(labelText, 0, 8, 0, 0), actions, wrapped)
+	return container.NewBorder(nil, nil, labelCol, actionsCol, wrapped)
 }
 
 func newConnectionStatRow(label, value string, valueColor color.Color) fyne.CanvasObject {

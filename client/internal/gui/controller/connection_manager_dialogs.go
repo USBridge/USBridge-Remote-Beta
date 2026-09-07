@@ -369,54 +369,6 @@ func buildInlineField(label string, field fyne.CanvasObject, actions fyne.Canvas
 	return view.NewInset(container.NewBorder(nil, nil, leftSide, nil, field), 0, 0, 6, 0)
 }
 
-// noInputBgTheme makes a widget.Entry render without its own background/border
-// so that a custom styled container can provide the visual shell instead.
-type noInputBgTheme struct{ fyne.Theme }
-
-func (t *noInputBgTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
-	if name == theme.ColorNameInputBackground || name == theme.ColorNameInputBorder || name == theme.ColorNameFocus {
-		return color.Transparent
-	}
-	return t.Theme.Color(name, variant)
-}
-
-// newConnectionDialogIconEntry wraps an entry in a Bootstrap-style input-group:
-// a styled dark rounded container with a leading icon and optional trailing actions.
-func newConnectionDialogIconEntry(iconRes fyne.Resource, entry *connectionDialogEntry, trailingAction fyne.CanvasObject) fyne.CanvasObject {
-	iconImg := canvas.NewImageFromResource(iconRes)
-	iconImg.FillMode = canvas.ImageFillContain
-	iconImg.Translucency = 0.35
-
-	iconWrap := container.NewCenter(container.NewGridWrap(fyne.NewSize(16, 16), iconImg))
-	iconPad := view.NewInset(iconWrap, 10, 6, 0, 0)
-
-	bg := canvas.NewRectangle(design.ColorSurfaceLight)
-	bg.CornerRadius = design.RadiusMD
-	bdr := canvas.NewRectangle(color.Transparent)
-	bdr.CornerRadius = design.RadiusMD
-	bdr.StrokeColor = design.ColorBorder
-	bdr.StrokeWidth = 1
-
-	themedEntry := container.NewThemeOverride(entry, &noInputBgTheme{design.NewBrandTheme()})
-
-	entry.onFocusChanged = func(focused bool) {
-		if focused {
-			bdr.StrokeColor = design.ColorAccent
-		} else {
-			bdr.StrokeColor = design.ColorBorder
-		}
-		bdr.Refresh()
-	}
-
-	var inner fyne.CanvasObject
-	if trailingAction != nil {
-		inner = container.NewBorder(nil, nil, iconPad, view.NewInset(trailingAction, 6, 10, 0, 0), themedEntry)
-	} else {
-		inner = container.NewBorder(nil, nil, iconPad, nil, themedEntry)
-	}
-	return container.NewStack(bg, inner, bdr)
-}
-
 // newConnectionDialogEntryAddon creates a small icon button styled to match the
 // entry field height, intended as an attached addon button to the right of a field.
 func newConnectionDialogEntryAddon(iconRes fyne.Resource, onTapped func()) fyne.CanvasObject {
@@ -615,20 +567,22 @@ func (rr *connectionDialogRegisterRowRenderer) Objects() []fyne.CanvasObject {
 }
 func (rr *connectionDialogRegisterRowRenderer) Destroy() {}
 
-// buildConnectionDialogForm assembles the form body: Name (its own row,
-// same newConnectionDialogIconEntry chrome as before) + statsBox (the
-// LAN/TS/Token block -- view.NewConnectionCardEditableStatsBox, the exact
-// widget/styling the Grid card's inline edit and List's split-edit panel
-// already use) + the optional register-in-Tailscale row.
+// buildConnectionDialogForm assembles the form body: statsBox (Name/LAN/TS/
+// Token, all one box now -- view.NewConnectionCardEditableStatsBox(true,
+// ...), the exact widget/styling the Grid card's inline edit and List's
+// split-edit panel already use for LAN/TS/Token, extended with a Name row
+// this one caller opts into) + the optional register-in-Tailscale row.
+// Name used to be its own separate newConnectionDialogIconEntry row in a
+// different style entirely -- one dark box now, not two different-looking
+// ones stacked on top of each other.
 //
-// This dropped the old per-platform Tailscale-field handling (a hint +
+// This also dropped the old per-platform Tailscale-field handling (a hint +
 // download link instead of the field itself on wasm, where there's no
-// embedded tsnet to dial it with) -- statsBox always shows all three rows,
-// same as the Grid/List surfaces it's shared with, neither of which special-
-// cases wasm here either.
-func buildConnectionDialogForm(nameEntry *connectionDialogEntry, statsBox fyne.CanvasObject, registerCheck fyne.CanvasObject) fyne.CanvasObject {
+// embedded tsnet to dial it with) -- statsBox always shows all three
+// address/key rows, same as the Grid/List surfaces it's shared with, neither
+// of which special-cases wasm here either.
+func buildConnectionDialogForm(statsBox fyne.CanvasObject, registerCheck fyne.CanvasObject) fyne.CanvasObject {
 	items := []fyne.CanvasObject{
-		newConnectionDialogIconEntry(theme.AccountIcon(), nameEntry, nil),
 		statsBox,
 	}
 	if registerCheck != nil {
@@ -788,6 +742,20 @@ func (r *connectionDialogIconBlockRenderer) Objects() []fyne.CanvasObject {
 }
 func (r *connectionDialogIconBlockRenderer) Destroy() {}
 
+// mutedForegroundTheme recolors a themed widget's foreground text --
+// widget.Label has no color field of its own (unlike canvas.Text), so the
+// header subtitle (needs Wrapping, which only widget.Label supports) goes
+// through this to still render muted instead of the theme's default
+// full-brightness text color.
+type mutedForegroundTheme struct{ fyne.Theme }
+
+func (t *mutedForegroundTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
+	if name == theme.ColorNameForeground {
+		return design.ColorTextMuted
+	}
+	return t.Theme.Color(name, variant)
+}
+
 func showAdaptiveConnectionDialog(parent fyne.Window, dialogTitle, subtitle string, headerIcon fyne.Resource, feedback fyne.CanvasObject, form fyne.CanvasObject, connectBtn, saveBtn, deleteBtn fyne.CanvasObject, footer ...fyne.CanvasObject) *widget.PopUp {
 	title := view.NewBrandText(dialogTitle, 17, design.ColorTextLight, true)
 
@@ -795,11 +763,26 @@ func showAdaptiveConnectionDialog(parent fyne.Window, dialogTitle, subtitle stri
 
 	var titleCol fyne.CanvasObject = title
 	if strings.TrimSpace(subtitle) != "" {
-		subtitleTxt := canvas.NewText(subtitle, design.ColorTextMuted)
-		subtitleTxt.TextSize = 11
-		titleCol = container.NewVBox(title, subtitleTxt)
+		// widget.Label (wrapping), not canvas.Text -- canvas.Text can't wrap
+		// at all, so a subtitle this long rendered as one unbroken line
+		// wider than the dialog itself. Centered (see below), an
+		// overflowing element straddles both edges evenly, which is what
+		// actually caused the "stuck to the left edge" look -- it wasn't a
+		// missing left inset, the text was simply wider than the box it was
+		// supposedly centered in.
+		subtitleLbl := widget.NewLabel(subtitle)
+		subtitleLbl.Wrapping = fyne.TextWrapWord
+		subtitleThemed := container.NewThemeOverride(subtitleLbl, &mutedForegroundTheme{design.NewBrandTheme()})
+		titleCol = container.NewVBox(title, subtitleThemed)
 	}
 
+	// titleCol renders as-is here, not container.NewCenter(titleCol) --
+	// Border already stretches this middle slot to fill the available
+	// width/height on its own, and centering on top of that is what broke
+	// wrapping (a widget.Label centered at its own natural size never
+	// actually gets the full width to wrap against) and is also just wrong
+	// for this header: title/subtitle read left-aligned in the reference,
+	// not centered.
 	var titleBar fyne.CanvasObject
 	if headerIcon != nil {
 		iconImg := canvas.NewImageFromResource(headerIcon)
@@ -811,16 +794,9 @@ func showAdaptiveConnectionDialog(parent fyne.Window, dialogTitle, subtitle stri
 		iconTile.StrokeWidth = 1
 		iconBox := container.NewStack(iconTile, container.NewCenter(iconImg))
 		iconBoxSized := container.NewGridWrap(fyne.NewSize(44, 44), iconBox)
-		titleBar = container.NewBorder(nil, nil, iconBoxSized, container.NewVBox(closeBtn), container.NewCenter(titleCol))
+		titleBar = container.NewBorder(nil, nil, iconBoxSized, nil, titleCol)
 	} else {
-		// container.NewVBox, not NewCenter, for closeBtn -- Border stretches
-		// the right slot to the row's *full* height (title+subtitle
-		// together), and NewCenter centered closeBtn against that whole
-		// two-line block instead of just the title line, reading as sitting
-		// too low. VBoxLayout top-aligns its one child regardless of how
-		// much extra height it's given, landing closeBtn level with title's
-		// own line instead.
-		titleBar = container.NewBorder(nil, nil, nil, container.NewVBox(closeBtn), container.NewCenter(titleCol))
+		titleBar = titleCol
 	}
 
 	// A thin teal-to-lime gradient line along the panel's very top edge --
@@ -918,16 +894,31 @@ func showAdaptiveConnectionDialog(parent fyne.Window, dialogTitle, subtitle stri
 	// before this, well short of the ~22px total gap the panel used to have
 	// when the outer wrap alone supplied 12px of top padding here -- 18+2
 	// gets back to roughly that same breathing room above the title.
-	headerBlock := container.NewVBox(topAccent, view.NewInset(titleBar, 18, 18, 18, 10), sep)
+	// right=44 (not 18): reserves clearance so title/subtitle text never
+	// runs under closeBtn, which -- see cornerBtn below -- sits closer to
+	// the panel's actual corner than this 18px content margin reaches.
+	headerBlock := container.NewVBox(topAccent, view.NewInset(titleBar, 18, 44, 18, 10), sep)
 	inner := container.NewBorder(
 		headerBlock,
 		view.NewInset(buttons, 18, 18, 14, 0),
 		nil, nil,
 		view.NewInset(scroll, 18, 18, 0, 0),
 	)
+	// closeBtn sits on its own layer, pinned close to the panel's actual
+	// top-right corner (10px top, 12px right) rather than sharing
+	// titleBar's own 18px content margin -- decoupled from the title's own
+	// vertical rhythm entirely, so it reads as a corner control instead of
+	// as part of the header text block. Not view.NewInset: that pads
+	// *around* content sized to fit it, but this layer gets handed the
+	// *entire* panel size (it's a sibling of bg/border in the Stack below)
+	// -- NewInset's Border-based padding would stretch closeBtn itself to
+	// fill that whole box instead of leaving it at its own natural size in
+	// the corner.
+	cornerBtn := container.New(&dialogCornerButtonLayout{Top: 10, Right: 12}, closeBtn)
 	panel := container.NewStack(
 		bg,
 		view.NewInset(inner, 0, 0, 0, 16),
+		cornerBtn,
 		border,
 	)
 
@@ -961,14 +952,15 @@ func showAdaptiveConnectionDialog(parent fyne.Window, dialogTitle, subtitle stri
 }
 
 func showConnectionEditorDialog(parent fyne.Window, window fyne.Window, spec connectionDialogSpec) *widget.PopUp {
-	nameEntry := newConnectionNameEntry(spec.nameValue, nil)
-
-	// The same LAN/TS/Token box (labels, placeholders, copy/paste icons,
-	// dark styling) the Grid card's inline edit and List's split-edit panel
-	// already use -- entryWidth 0 so the entry fills the row instead of
-	// sitting at their fixed 160px (this dialog is much wider than either).
-	statsBox, lanEntry, tsEntry, tokenEntry := view.NewConnectionCardEditableStatsBox(
-		spec.internalHostValue, spec.tailscaleHostValue, spec.masterKeyValue, 0,
+	// The same Name/LAN/TS/Token box (labels, placeholders, copy/paste
+	// icons, dark styling) the Grid card's inline edit and List's split-edit
+	// panel already use for LAN/TS/Token -- includeName=true is this
+	// dialog's own addition (Grid/List keep Name as their own separate row
+	// outside this box, so they pass false); entryWidth 0 so each entry
+	// fills its row instead of sitting at their fixed 160px (this dialog is
+	// much wider than either).
+	statsBox, nameEntry, lanEntry, tsEntry, tokenEntry := view.NewConnectionCardEditableStatsBox(
+		true, spec.nameValue, spec.internalHostValue, spec.tailscaleHostValue, spec.masterKeyValue, 0,
 	)
 
 	registerCheck := newConnectionDialogRegisterRow(
@@ -992,7 +984,7 @@ func showConnectionEditorDialog(parent fyne.Window, window fyne.Window, spec con
 		updateRegisterVisibility(text)
 	}
 
-	form := buildConnectionDialogForm(nameEntry, statsBox, registerCheckContainer)
+	form := buildConnectionDialogForm(statsBox, registerCheckContainer)
 
 	var d *widget.PopUp
 
@@ -1028,7 +1020,9 @@ func showConnectionEditorDialog(parent fyne.Window, window fyne.Window, spec con
 			// fast paths (scan/paste) read first, "OR ENTER MANUALLY" makes
 			// the fallback explicit before the fields that fallback fills.
 			formContent = container.NewVBox(
-				iconRow,
+				// top=14 -- iconRow sat right under the header divider with
+				// nothing between them otherwise.
+				view.NewInset(iconRow, 0, 0, 14, 0),
 				view.NewInset(newConnectionDialogManualDivider(), 0, 0, 14, 10),
 				form,
 			)
@@ -1196,14 +1190,6 @@ func (l *thinDividerLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) 
 	lineWidth := maxFloat32(0, labelX-l.gap)
 	line.Move(fyne.NewPos(0, (size.Height-lineHeight)/2))
 	line.Resize(fyne.NewSize(lineWidth, lineHeight))
-}
-
-func newConnectionNameEntry(value string, onFocusChanged func(bool)) *connectionDialogEntry {
-	entry := &connectionDialogEntry{onFocusChanged: onFocusChanged}
-	entry.ExtendBaseWidget(entry)
-	entry.Text = value
-	entry.SetPlaceHolder("Name")
-	return entry
 }
 
 func showQuickConnectQRCode(window fyne.Window, internalHost, tailscaleHost, masterKey string) {
@@ -1558,6 +1544,31 @@ func (l *connectionDialogButtonsLayout) MinSize(objects []fyne.CanvasObject) fyn
 	rightMin := objects[1].MinSize()
 	height := maxFloat32(leftMin.Height, rightMin.Height)
 	return fyne.NewSize(leftMin.Width+rightMin.Width+l.gap, height)
+}
+
+// dialogCornerButtonLayout pins its one child at its own natural size, Top
+// below and Right in from the top-right corner of whatever size it's
+// actually handed -- unlike view.NewInset (Border-based padding), which
+// stretches the child itself to fill the padded box, this is for a child
+// placed in a much larger box (a Stack layer sized to the whole panel) that
+// should stay pinned to a fixed corner regardless.
+type dialogCornerButtonLayout struct {
+	Top, Right float32
+}
+
+func (l *dialogCornerButtonLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	if len(objects) == 0 {
+		return
+	}
+	child := objects[0]
+	childMin := child.MinSize()
+	x := maxFloat32(0, size.Width-l.Right-childMin.Width)
+	child.Move(fyne.NewPos(x, l.Top))
+	child.Resize(childMin)
+}
+
+func (l *dialogCornerButtonLayout) MinSize([]fyne.CanvasObject) fyne.Size {
+	return fyne.NewSize(0, 0)
 }
 
 type connectionDialogTitleLayout struct{}

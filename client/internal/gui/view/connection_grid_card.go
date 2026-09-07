@@ -123,7 +123,8 @@ func NewConnectionGridCard(data ConnectionCardData, state ConnectionRowState, ac
 		// left between the fixed-size status dot and type badge, instead
 		// of sitting at its own small MinSize the way DeviceRowControlsLayout
 		// (the non-editing leftTopControls' layout) would leave it.
-		topRow = container.NewBorder(nil, nil, statusIndicator, typeBadge, wrapGridCardEntry(nameEntry, 12))
+		leftElement := container.NewCenter(statusIndicator)
+		topRow = container.NewBorder(nil, nil, leftElement, typeBadge, wrapGridCardEntry(nameEntry, 12, design.ColorTextLight))
 	} else {
 		nameText := NewBrandText(strings.TrimSpace(data.Name), 12, design.ColorTextLight, true)
 
@@ -205,10 +206,10 @@ func NewConnectionGridCard(data ConnectionCardData, state ConnectionRowState, ac
 		})
 		deleteBtn.SetDisabled(state.Disabled)
 
-		saveIcon := fyne.NewStaticResource("connection-save.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#4c6803"><path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z"/></svg>`))
+		saveIcon := fyne.NewStaticResource("connection-save.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#111111"><path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4z"/></svg>`))
 		saveBtn = newIconChromeButton(iconChromeButtonSpec{
-			NormalFill:   connectColor,
-			HoverFill:    connectHover,
+			NormalFill:   design.ColorConnectionBadgeText,
+			HoverFill:    color.NRGBA{R: 0x61, G: 0xf0, B: 0xd3, A: 0xff},
 			DisabledFill: connectionActionBlockedFill,
 			Stroke:       color.Transparent,
 			CornerRadius: 6,
@@ -280,12 +281,25 @@ func NewConnectionGridCard(data ConnectionCardData, state ConnectionRowState, ac
 	if chipsRow != nil {
 		children = append(children, chipsRow)
 	}
-	children = append(children, statsBox, divider, bottomRow)
-	content := NewInset(container.NewVBox(children...), 12, 12, 12, 8)
+
+	var content *fyne.Container
+	if editing {
+		statsBox = NewInset(statsBox, 0, 0, 3, 0)   // push down slightly by 3px
+		bottomRow = NewInset(bottomRow, 0, 0, 0, 4) // push buttons up slightly
+		children = append(children, statsBox, bottomRow)
+		content = NewInset(container.NewVBox(children...), 12, 12, 6, 8)
+	} else {
+		children = append(children, statsBox, divider, bottomRow)
+		content = NewInset(container.NewVBox(children...), 12, 12, 12, 8)
+	}
 
 	cardBg := canvas.NewRectangle(design.ColorGray900)
 	cardBg.CornerRadius = design.RadiusLG
-	cardBg.StrokeColor = design.ColorTailscaleChipBorder
+	if editing {
+		cardBg.StrokeColor = design.ColorConnectionBadgeText
+	} else {
+		cardBg.StrokeColor = design.ColorTailscaleChipBorder
+	}
 	cardBg.StrokeWidth = 1
 	cardBg.SetMinSize(fyne.NewSize(connectionCardWidth, connectionCardHeight))
 
@@ -305,7 +319,11 @@ func NewConnectionGridCard(data ConnectionCardData, state ConnectionRowState, ac
 				hoverTimer.Stop()
 			}
 			hoverTimer = time.AfterFunc(50*time.Millisecond, func() {
-				cardBg.StrokeColor = design.ColorTailscaleChipBorder
+				if editing {
+					cardBg.StrokeColor = design.ColorConnectionBadgeText
+				} else {
+					cardBg.StrokeColor = design.ColorTailscaleChipBorder
+				}
 				cardBg.Refresh()
 			})
 		}
@@ -505,14 +523,26 @@ func newConnectionCardStatsBox(lanAddress, tailscaleAddress string) fyne.CanvasO
 // Token entries (newConnectionCardEditableStatsBox).
 type gridCardFieldTheme struct {
 	fyne.Theme
-	textSize float32
+	textSize  float32
+	textColor color.Color
 }
 
 func (t *gridCardFieldTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
 	switch name {
-	case theme.ColorNameInputBackground, theme.ColorNameInputBorder, theme.ColorNameFocus, theme.ColorNameShadow:
+	case theme.ColorNameInputBackground:
+		return color.NRGBA{R: 255, G: 255, B: 255, A: 8} // subtle background
+	case theme.ColorNameFocus:
+		return color.NRGBA{R: 255, G: 255, B: 255, A: 20} // brighter on focus
+	case theme.ColorNameInputBorder:
+		return color.NRGBA{R: 0x41, G: 0xe0, B: 0xc3, A: 0x40} // faint turquoise border
+	case theme.ColorNamePrimary:
+		return design.ColorConnectionBadgeText // bright turquoise for active cursor/border
+	case theme.ColorNameShadow:
 		return color.Transparent
 	case theme.ColorNameForeground:
+		if t.textColor != nil {
+			return t.textColor
+		}
 		return design.ColorTextLight
 	case theme.ColorNamePlaceHolder:
 		return design.ColorTextMuted
@@ -527,9 +557,13 @@ func (t *gridCardFieldTheme) Size(name fyne.ThemeSizeName) float32 {
 	case theme.SizeNameText:
 		return t.textSize
 	case theme.SizeNameInputBorder:
-		return 0
+		return 1
 	case theme.SizeNamePadding:
 		return 2
+	case theme.SizeNameInnerPadding:
+		return 5
+	case theme.SizeNameInputRadius:
+		return 4
 	}
 	return t.Theme.Size(name)
 }
@@ -537,8 +571,8 @@ func (t *gridCardFieldTheme) Size(name fyne.ThemeSizeName) float32 {
 // wrapGridCardEntry applies gridCardFieldTheme to entry via a ThemeOverride,
 // same trick controller.noInputBgTheme uses for the modal editor's fields,
 // just local to this package (view can't import controller).
-func wrapGridCardEntry(entry *widget.Entry, textSize float32) fyne.CanvasObject {
-	return container.NewThemeOverride(entry, &gridCardFieldTheme{Theme: design.NewBrandTheme(), textSize: textSize})
+func wrapGridCardEntry(entry *widget.Entry, textSize float32, textColor color.Color) fyne.CanvasObject {
+	return container.NewThemeOverride(entry, &gridCardFieldTheme{Theme: design.NewBrandTheme(), textSize: textSize, textColor: textColor})
 }
 
 // newConnectionCardEditableStatsBox is newConnectionCardStatsBox's edit-mode
@@ -550,10 +584,14 @@ func newConnectionCardEditableStatsBox(lanAddress, tailscaleAddress, masterKey s
 	lanEntry = newConnectionCardFieldEntry(lanAddress, "LAN address")
 	tailscaleEntry = newConnectionCardFieldEntry(tailscaleAddress, "Tailscale address")
 	tokenEntry = newConnectionCardFieldEntry(masterKey, "Token")
+	tokenEntry.MultiLine = true
+	tokenEntry.Wrapping = fyne.TextWrapBreak
 
-	lanRow := newConnectionStatEditRow("LAN", lanEntry)
-	tsRow := newConnectionStatEditRow("TS", tailscaleEntry)
-	tokenRow := newConnectionStatEditRow("Token", tokenEntry)
+	tsValueColor := color.NRGBA{R: 0xeb, G: 0xff, B: 0xbc, A: 0xff}
+
+	lanRow := newConnectionStatEditRow("LAN", lanEntry, 10, design.ColorTextLight, false)
+	tsRow := newConnectionStatEditRow("TS", tailscaleEntry, 10, tsValueColor, false)
+	tokenRow := newConnectionStatEditRow("Token", tokenEntry, 8, design.ColorTextLight, true)
 
 	dividerColor := color.NRGBA{R: 0x29, G: 0x2d, B: 0x27, A: 0xff}
 	sep1 := canvas.NewRectangle(dividerColor)
@@ -568,7 +606,7 @@ func newConnectionCardEditableStatsBox(lanAddress, tailscaleAddress, masterKey s
 	bg.StrokeColor = design.ColorTailscaleChipBorder
 	bg.StrokeWidth = 1
 
-	box = container.NewStack(bg, NewInset(container.NewVBox(rows...), 12, 12, 8, 8))
+	box = container.NewStack(bg, NewInset(container.New(&tightStatsVBoxLayout{Gap: 4}, rows...), 12, 12, 4, 4))
 	return box, lanEntry, tailscaleEntry, tokenEntry
 }
 
@@ -579,15 +617,68 @@ func newConnectionCardFieldEntry(value, placeholder string) *widget.Entry {
 	return entry
 }
 
+// newGridCardFieldActions is the copy/paste icon pair for one editable
+// field (LAN/TS/Token) -- the same affordance the modal editor's
+// fieldActions gives each field (connection_manager_dialogs.go), just a
+// parallel small implementation here since view can't import controller.
+// Paste follows the same OS-native-vs-wasm split as the modal's
+// pasteClipboardInto -- see connection_grid_card_paste_default.go and
+// connection_grid_card_paste_wasm.go.
+func newGridCardFieldActions(entry *widget.Entry) fyne.CanvasObject {
+	copyBtn := newIconChromeButton(iconChromeButtonSpec{
+		NormalFill: color.Transparent,
+		HoverFill:  design.ColorSurfaceLight,
+		Stroke:     color.Transparent,
+		NormalIcon: theme.ContentCopyIcon(),
+		IconSize:   fyne.NewSize(11, 11),
+		ButtonSize: fyne.NewSize(18, 18),
+		OnTapped: func() {
+			if entry == nil || entry.Text == "" {
+				return
+			}
+			fyne.CurrentApp().Clipboard().SetContent(entry.Text)
+		},
+	})
+	pasteBtn := newIconChromeButton(iconChromeButtonSpec{
+		NormalFill: color.Transparent,
+		HoverFill:  design.ColorSurfaceLight,
+		Stroke:     color.Transparent,
+		NormalIcon: theme.ContentPasteIcon(),
+		IconSize:   fyne.NewSize(11, 11),
+		ButtonSize: fyne.NewSize(18, 18),
+		OnTapped: func() {
+			pasteClipboardIntoEntry(entry)
+		},
+	})
+	return container.New(&DeviceRowControlsLayout{Gap: 2}, copyBtn, pasteBtn)
+}
+
 // newConnectionStatEditRow mirrors newConnectionStatRow's [label | value]
-// shape with an editable entry standing in for the value text.
-func newConnectionStatEditRow(label string, entry *widget.Entry) fyne.CanvasObject {
+// shape with an editable entry standing in for the value text, plus a
+// copy/paste icon pair (newGridCardFieldActions) next to the label.
+// stackedActions puts that pair underneath the label instead of beside it
+// -- used for the taller, multi-line Token row, where "beside" would push
+// into the entry's own width.
+func newConnectionStatEditRow(label string, entry *widget.Entry, textSize float32, textColor color.Color, stackedActions bool) fyne.CanvasObject {
 	c5c8b5Color := color.NRGBA{R: 0xc5, G: 0xc8, B: 0xb5, A: 0xff}
 	labelText := canvas.NewText(label, c5c8b5Color)
 	labelText.TextSize = 10
 	labelText.TextStyle.Monospace = true
 
-	return container.NewBorder(nil, nil, NewInset(labelText, 0, 8, 0, 0), nil, wrapGridCardEntry(entry, 10))
+	entry.TextStyle.Monospace = true
+
+	actions := newGridCardFieldActions(entry)
+
+	var leftColumn fyne.CanvasObject
+	if stackedActions {
+		leftColumn = container.NewVBox(labelText, actions)
+	} else {
+		leftColumn = container.New(&DeviceRowControlsLayout{Gap: 4}, actions, labelText)
+	}
+
+	// Use a fixed width for the input and push it to the right so it looks aligned
+	wrapped := container.New(&rightAlignedInputLayout{Width: 160}, wrapGridCardEntry(entry, textSize, textColor))
+	return container.NewBorder(nil, nil, NewInset(leftColumn, 0, 8, 0, 0), nil, wrapped)
 }
 
 func newConnectionStatRow(label, value string, valueColor color.Color) fyne.CanvasObject {
@@ -700,4 +791,61 @@ func newConnectionTypeBadge(isAgent, isKVM bool, accent color.Color) fyne.Canvas
 
 	chip := container.New(&typeBadgeLayout{}, bg, dot, label)
 	return container.NewCenter(chip)
+}
+
+type tightStatsVBoxLayout struct {
+	Gap float32
+}
+
+func (l *tightStatsVBoxLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	var w, h float32
+	visibleCount := 0
+	for _, o := range objects {
+		if !o.Visible() {
+			continue
+		}
+		childSize := o.MinSize()
+		if childSize.Width > w {
+			w = childSize.Width
+		}
+		h += childSize.Height
+		visibleCount++
+	}
+	if visibleCount > 1 {
+		h += float32(visibleCount-1) * l.Gap
+	}
+	return fyne.NewSize(w, h)
+}
+
+func (l *tightStatsVBoxLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	y := float32(0)
+	for _, o := range objects {
+		if !o.Visible() {
+			continue
+		}
+		childSize := o.MinSize()
+		o.Resize(fyne.NewSize(size.Width, childSize.Height))
+		o.Move(fyne.NewPos(0, y))
+		y += childSize.Height + l.Gap
+	}
+}
+
+type rightAlignedInputLayout struct {
+	Width float32
+}
+
+func (l *rightAlignedInputLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	if len(objects) == 0 {
+		return fyne.NewSize(0, 0)
+	}
+	return fyne.NewSize(l.Width, objects[0].MinSize().Height)
+}
+
+func (l *rightAlignedInputLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	if len(objects) == 0 {
+		return
+	}
+	objects[0].Resize(fyne.NewSize(l.Width, size.Height))
+	// Push to the right
+	objects[0].Move(fyne.NewPos(size.Width-l.Width, 0))
 }

@@ -60,7 +60,11 @@ func NewConnectionEditPanel(data ConnectionEditPanelData, actions ConnectionEdit
 	nameEntry.SetText(strings.TrimSpace(data.Name))
 	nameEntry.TextStyle = fyne.TextStyle{Bold: true}
 
-	topRow := container.NewBorder(nil, nil, container.NewCenter(NewInset(statusIndicator, 0, 0, 8, 0)), nil, wrapGridCardEntry(nameEntry, 13, design.ColorTextLight))
+	// NewInset's args are (content, left, right, top, bottom) -- this wants
+	// a gap to the right of the icon, before the name field, not a top
+	// pad (that pushed the icon down out of vertical center within its
+	// Center wrapper).
+	topRow := container.NewBorder(nil, nil, container.NewCenter(NewInset(statusIndicator, 0, 8, 0, 0)), nil, wrapGridCardEntry(nameEntry, 13, design.ColorTextLight))
 
 	cancelIcon := fyne.NewStaticResource("connection-cancel-edit.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#c5c8b5"><path d="M18.3 5.71 12 12.01l-6.3-6.3-1.41 1.41 6.3 6.3-6.3 6.3 1.41 1.41 6.3-6.3 6.3 6.3 1.41-1.41-6.3-6.3 6.3-6.3z"/></svg>`))
 	cancelBtn := newIconChromeButton(iconChromeButtonSpec{
@@ -113,7 +117,16 @@ func NewConnectionEditPanel(data ConnectionEditPanelData, actions ConnectionEdit
 	actionsBox := container.New(&DeviceRowControlsLayout{Gap: 8}, deleteBtn, saveBtn, cancelBtn)
 	bottomRow := container.NewBorder(nil, nil, nil, actionsBox)
 
-	content := NewInset(container.NewVBox(topRow, statsBox, NewInset(bottomRow, 20, 0, 0, 0)), 14, 14, 14, 14)
+	// A little breathing room between name/info-box/buttons -- the 20px
+	// left pad here previously (a NewInset param-order mix-up: (content,
+	// left, right, top, bottom), so that was shifting the whole row
+	// sideways, not adding a top gap) is now a proper top gap on both
+	// statsBox and bottomRow instead.
+	content := NewInset(container.NewVBox(
+		topRow,
+		NewInset(statsBox, 0, 0, 4, 0),
+		NewInset(bottomRow, 0, 0, 4, 0),
+	), 14, 14, 14, 14)
 
 	bg := canvas.NewRectangle(design.ColorGray900)
 	bg.CornerRadius = design.RadiusLG

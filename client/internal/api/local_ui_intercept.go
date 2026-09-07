@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"usbridge-client/internal/localui"
 )
@@ -13,7 +14,8 @@ import (
 // proxy answers the ui.parse tool call itself instead of forwarding it to
 // the device -- running the same three-model pipeline (YOLOv8 icon
 // detector + DBNet text detector + SVTR text recognizer) locally via ONNX
-// Runtime on this machine's CPU/Intel iGPU instead of the device's RK3566
+// Runtime on this machine's CPU or GPU (CoreML/DirectML/OpenVINO, see
+// internal/localui/onnx.go's acceleratorEP) instead of the device's RK3566
 // NPU. It still fetches the raw screenshot from the device (screen.get_image
 // is cheap -- no OCR/YOLO runs on the device for that call, see that tool's
 // description), only the expensive detection/recognition work moves local.
@@ -21,7 +23,7 @@ import (
 // This exists because ui.parse at 1920x1080 tiles DBNet into 6 native-
 // resolution passes on the device's single-core NPU (~20s end to end, see
 // mcpProxyTimeout's doc comment); the same models on this machine's CPU or
-// OpenVINO GPU EP finish in well under 5s (see internal/localui's package
+// an accelerator EP finish in well under 5s (see internal/localui's package
 // doc comment and its benchmarked numbers).
 //
 // Every other MCP tool (including ui.parse's own tools/list entry) is
@@ -137,7 +139,7 @@ func tryLocalUIParse(client *USBClient, reqBody []byte) (respBody []byte, handle
 		return nil, false, nil
 	}
 
-	imgBytes, err := fetchScreenImage(client)
+	imgBytes, err := screenImageForLocalParse(client)
 	if err != nil {
 		return nil, true, fmt.Errorf("local ui.parse: fetch screen.get_image from device: %w", err)
 	}
@@ -166,6 +168,31 @@ func tryLocalUIParse(client *USBClient, reqBody []byte) (respBody []byte, handle
 		return nil, true, fmt.Errorf("local ui.parse: marshal response: %w", err)
 	}
 	return body, true, nil
+}
+
+// liveFrameWaitTimeout bounds how long screenImageForLocalParse waits for
+// the video decode path to hand over a frame (see live_frame.go) before
+// giving up and falling back to a device round-trip. Long enough that a
+// live session (frames arriving every 8-16ms at 60-120fps) always wins the
+// race; short enough that calling ui.parse with no video session open
+// (a perfectly normal, headless MCP-agent use case) doesn't add a
+// noticeable stall before it falls back to fetchScreenImage.
+const liveFrameWaitTimeout = 300 * time.Millisecond
+
+// screenImageForLocalParse gets the screenshot local ui.parse decodes,
+// preferring a frame the video decode path is already producing (no extra
+// network round-trip or device-side capture) over fetchScreenImage's full
+// device round-trip. Only ever skips the device entirely when a video
+// session is actively streaming AND the operator is looking at it in the
+// GUI right now -- with no video session open (the common case for a
+// headless/background MCP agent), RequestLiveFrame just times out after
+// liveFrameWaitTimeout and this falls back to fetchScreenImage exactly as
+// before this existed.
+func screenImageForLocalParse(client *USBClient) ([]byte, error) {
+	if png, ok := RequestLiveFrame(liveFrameWaitTimeout); ok {
+		return png, nil
+	}
+	return fetchScreenImage(client)
 }
 
 // fetchScreenImage calls the device's screen.get_image MCP tool and

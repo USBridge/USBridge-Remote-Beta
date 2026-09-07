@@ -81,7 +81,7 @@ type AppConfig struct {
 	// this machine (see scripts/setup_localui.sh), and isn't validated on
 	// every platform/GPU this client runs on yet.
 	LocalUIParseEnabled  bool   `json:"local_ui_parse_enabled" mapstructure:"local_ui_parse_enabled"`
-	LocalUIParseGPU      bool   `json:"local_ui_parse_gpu" mapstructure:"local_ui_parse_gpu"`             // try the OpenVINO GPU execution provider (falls back to CPU automatically if unavailable)
+	LocalUIParseGPU      bool   `json:"local_ui_parse_gpu" mapstructure:"local_ui_parse_gpu"`             // try a GPU/accelerator execution provider -- CoreML (macOS), DirectML (Windows, any NVIDIA/AMD/Intel GPU), OpenVINO (Linux, Intel iGPU); falls back to CPU automatically if unavailable, see localui.acceleratorEP
 	LocalUIParseModelDir string `json:"local_ui_parse_model_dir" mapstructure:"local_ui_parse_model_dir"` // dir containing icon_detect.onnx/dbnet.onnx/svtr.onnx; "" resolves to ~/.usbridge/localui/models
 	LocalUIParseORTLib   string `json:"local_ui_parse_ort_lib" mapstructure:"local_ui_parse_ort_lib"`     // path to the ONNX Runtime shared lib; "" resolves to ~/.usbridge/localui/runtime/<localui.DefaultRuntimeLibName()>
 }

@@ -1,9 +1,11 @@
 # Local ui.parse ONNX models
 
 The three ONNX weight files in this directory back `internal/localui`'s
-client-side (CPU/Intel iGPU via OpenVINO) mirror of the device's
-`modules/ui_parser` Set-of-Mark pipeline: YOLOv8 icon/element detector +
-PaddleOCR-style DBNet text detector + SVTR text recognizer. See that
+client-side mirror of the device's `modules/ui_parser` Set-of-Mark pipeline:
+YOLOv8 icon/element detector + PaddleOCR-style DBNet text detector + SVTR
+text recognizer -- run on CPU, or accelerated via CoreML (macOS Apple
+Silicon), DirectML (Windows, any NVIDIA/AMD/Intel GPU), or OpenVINO (Linux,
+Intel iGPU), see `internal/localui/onnx.go`'s `acceleratorEP`. See that
 package's doc comment and `internal/api/local_ui_intercept.go` for how
 they're used.
 

@@ -14,6 +14,7 @@ import (
 	"usbridge-client/internal/gui/i18n"
 	"usbridge-client/internal/gui/view"
 	"usbridge-client/internal/models"
+	"usbridge-client/internal/service"
 
 	"github.com/sirupsen/logrus"
 
@@ -1447,6 +1448,13 @@ func (mw *MainWindow) refreshMainHeaderLayout() {
 	}
 }
 
+// updateVideoIconLabel refreshes both badges on the video icon: the
+// top-left video fps (unchanged) and the bottom-right detection fps --
+// service.DetectionFPS's measured rate for the local ui.parse/AI Vision
+// pipeline (see ai_vision.go's DetectionFPS doc comment), 0/hidden
+// whenever AI Vision's live overlay is off or hasn't completed a pass yet.
+// Both are driven from the same 1Hz callback (videoWidget.SetOnFPSChanged,
+// see updateStats), so the two numbers refresh in lockstep.
 func (mw *MainWindow) updateVideoIconLabel() {
 	if mw.videoIcon == nil {
 		return
@@ -1457,8 +1465,14 @@ func (mw *MainWindow) updateVideoIconLabel() {
 		label = fmt.Sprintf("%.0f", math.Round(mw.currentVideoFPS))
 	}
 
+	detectionLabel := ""
+	if detFPS := service.DetectionFPS(); detFPS > 0 {
+		detectionLabel = fmt.Sprintf("%.1f", detFPS)
+	}
+
 	fyne.Do(func() {
 		mw.videoIcon.SetBadgeText(label)
+		mw.videoIcon.SetSecondaryBadgeText(detectionLabel)
 	})
 }
 

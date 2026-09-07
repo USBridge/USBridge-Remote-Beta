@@ -203,7 +203,7 @@ func (p *MCPProxy) handle(w http.ResponseWriter, r *http.Request) {
 
 	// Local ui.parse offload (see local_ui_intercept.go): when enabled in
 	// settings, answer ui.parse ourselves via ONNX Runtime on this
-	// machine's CPU/iGPU instead of forwarding to the device's NPU. Every
+	// machine's CPU or GPU instead of forwarding to the device's NPU. Every
 	// other tool call falls through to the normal forward path below
 	// unchanged.
 	if localResp, handled, localErr := tryLocalUIParse(client, body); handled {

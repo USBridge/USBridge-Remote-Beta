@@ -100,3 +100,38 @@ func hCenterDist(a, b Box) float64 {
 	}
 	return bc - ac
 }
+
+// nearIconGap is how far (in pixels, at native resolution) a detected text
+// box can be from the nearest icon's bounding box and still count as
+// "near" for filterBoxesNearIcons -- deliberately more generous than
+// associateLabels' own labelMaxLineGap/labelMaxHOffset (45/70) above,
+// since under-filtering (a few extra OCR'd boxes) is a much cheaper
+// mistake than over-filtering (silently dropping a real label).
+const nearIconGap = 80.0
+
+// filterBoxesNearIcons keeps only the boxes that fall within nearIconGap
+// of at least one icon's bounding box (expanded by that gap on every
+// side) -- see ParseFastNearIcons's doc comment in parser.go for why and
+// where this is used. Returns boxes unchanged if there are no icons to
+// filter against, rather than silently dropping everything.
+func filterBoxesNearIcons(icons []Icon, boxes []Box) []Box {
+	if len(icons) == 0 {
+		return boxes
+	}
+	var out []Box
+	for _, b := range boxes {
+		for _, icon := range icons {
+			expanded := Box{
+				X1: icon.Bbox.X1 - nearIconGap,
+				Y1: icon.Bbox.Y1 - nearIconGap,
+				X2: icon.Bbox.X2 + nearIconGap,
+				Y2: icon.Bbox.Y2 + nearIconGap,
+			}
+			if overlapsH(b, expanded) && overlapsV(b, expanded) {
+				out = append(out, b)
+				break
+			}
+		}
+	}
+	return out
+}

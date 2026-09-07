@@ -36,14 +36,24 @@ type ScriptsTabWidget struct {
 	// Root container returned by GetContainer.
 	outerContainer *fyne.Container
 
-	// normalContent is the regular MCP+Scripts UI; lockedContent is shown
-	// instead when connected to a non-USBridge OS agent (Windows/Linux/macOS),
-	// since script management is a USBridge-hardware-only feature.
+	// normalContent is the persistent MCP+Scripts UI tree, always shown as
+	// the tab body -- MCP works against any connected device (hardware or
+	// software agent alike, see SetClient's doc comment), so it's no longer
+	// gated behind agent type the way the Scripts section still is.
 	normalContent fyne.CanvasObject
-	lockedContent fyne.CanvasObject
 
 	// Scripts section body — VBox of script rows, rebuilt on client change.
+	// Also doubles as the "Not connected"/locked-notice slot (see
+	// showScriptsLocked) -- script management (running/editing .star files
+	// on SD/eMMC) only applies to real USBridge hardware, not a plain OS
+	// agent, but that no longer needs to take the MCP card above it down
+	// too (see SetClient's doc comment).
 	scriptsBodyContainer *fyne.Container
+
+	// New-script buttons, disabled while the Scripts section is locked
+	// (non-USBridge agent or no client) so they don't open a dialog whose
+	// Create would just fail against a device with no script storage.
+	newEmmcBtn, newSDBtn *widget.Button
 
 	// Per-script status updaters, keyed by path; rebuilt alongside the row list.
 	rowUpdaters map[string]func(bool, string)
@@ -76,6 +86,13 @@ func (w *ScriptsTabWidget) GetContainer() *fyne.Container {
 
 // SetClient updates the device client and refreshes the tab content.
 // Pass nil to reflect a disconnected state.
+//
+// MCP is agent-agnostic: the proxy just forwards signed /api/mcp requests
+// to whatever client is set, and both the hardware KVM and the software
+// Agent (agent/internal/api's mcp() handler) now answer it -- the earlier
+// whole-tab lock predated the Agent having an MCP server to talk to at all,
+// and blocked it along with the genuinely hardware-only Scripts section
+// below. Only that Scripts section still checks agentOS.
 func (w *ScriptsTabWidget) SetClient(c *api.USBClient) {
 	w.stopStatusPoll()
 
@@ -98,10 +115,7 @@ func (w *ScriptsTabWidget) SetClient(c *api.USBClient) {
 	})
 
 	if c == nil {
-		fyne.Do(func() {
-			w.showNormalState()
-			w.showEmptyScriptsState()
-		})
+		fyne.Do(func() { w.showScriptsLocked("Not connected") })
 		return
 	}
 
@@ -122,28 +136,35 @@ func (w *ScriptsTabWidget) SetClient(c *api.USBClient) {
 		}
 
 		if !isUSBridgeAgentOS(agentOS) {
-			fyne.Do(func() { w.showLockedState() })
+			fyne.Do(func() { w.showScriptsLocked("Scripts are available on USBridge hardware only.") })
 			return
 		}
 
-		fyne.Do(func() { w.showNormalState() })
+		fyne.Do(func() {
+			w.newEmmcBtn.Show()
+			w.newSDBtn.Show()
+		})
 		w.refreshScriptsList()
 		w.startStatusPoll()
 	}()
 }
 
-// showLockedState replaces the whole tab body with a wait notice — Scripts
-// management (running/editing .star scripts on SD/eMMC) only applies to
-// real USBridge hardware, not plain OS agents.
-func (w *ScriptsTabWidget) showLockedState() {
-	w.outerContainer.Objects = []fyne.CanvasObject{w.lockedContent}
-	w.outerContainer.Refresh()
-}
+// showScriptsLocked replaces the Scripts card's body with a centered notice
+// and hides the New (eMMC)/New (SD) buttons -- both name SD/eMMC storage
+// that doesn't exist on a software Agent at all, so disabling them (leaving
+// two dead buttons visible) isn't enough; they need to not be there.
+// The MCP card above stays fully usable regardless of agent type.
+func (w *ScriptsTabWidget) showScriptsLocked(msg string) {
+	w.newEmmcBtn.Hide()
+	w.newSDBtn.Hide()
 
-// showNormalState restores the regular MCP+Scripts UI tree.
-func (w *ScriptsTabWidget) showNormalState() {
-	w.outerContainer.Objects = []fyne.CanvasObject{w.normalContent}
-	w.outerContainer.Refresh()
+	text := canvas.NewText(msg, design.ColorTextMuted)
+	text.TextSize = 13
+	text.Alignment = fyne.TextAlignCenter
+	w.scriptsBodyContainer.Objects = []fyne.CanvasObject{
+		view.NewInset(container.NewCenter(text), 20, 20, 20, 20),
+	}
+	w.scriptsBodyContainer.Refresh()
 }
 
 // ─── Build ────────────────────────────────────────────────────────────────────
@@ -152,19 +173,19 @@ func (w *ScriptsTabWidget) build() {
 	mcpCard := w.buildMCPCard()
 
 	w.scriptsBodyContainer = container.NewVBox()
-	w.showEmptyScriptsState()
 
-	newEmmcBtn := widget.NewButtonWithIcon("New (eMMC)", theme.ContentAddIcon(), func() {
+	w.newEmmcBtn = widget.NewButtonWithIcon("New (eMMC)", theme.ContentAddIcon(), func() {
 		w.showNewScriptDialog("/mnt/emmc/scripts/", w.refreshScriptsList)
 	})
-	newEmmcBtn.Importance = widget.MediumImportance
+	w.newEmmcBtn.Importance = widget.MediumImportance
 
-	newSDBtn := widget.NewButtonWithIcon("New (SD)", theme.ContentAddIcon(), func() {
+	w.newSDBtn = widget.NewButtonWithIcon("New (SD)", theme.ContentAddIcon(), func() {
 		w.showNewScriptDialog("/mnt/sdcard/scripts/", w.refreshScriptsList)
 	})
-	newSDBtn.Importance = widget.LowImportance
+	w.newSDBtn.Importance = widget.LowImportance
+	w.showScriptsLocked("Not connected")
 
-	scriptsActions := container.NewHBox(newEmmcBtn, newSDBtn)
+	scriptsActions := container.NewHBox(w.newEmmcBtn, w.newSDBtn)
 	scriptsCard := w.buildSectionCard("", scriptsActions, w.scriptsBodyContainer)
 
 	content := container.New(&fillWidthVBoxLayout{gap: 0},
@@ -172,23 +193,6 @@ func (w *ScriptsTabWidget) build() {
 		view.NewInset(scriptsCard, 12, 12, 0, 8),
 	)
 	w.normalContent = container.NewVScroll(content)
-
-	lockedMsg := widget.NewLabel("Please wait — Scripts are available on USBridge hardware only.")
-	lockedMsg.Alignment = fyne.TextAlignCenter
-	lockedMsg.Wrapping = fyne.TextWrapWord
-	lockedMsg.Importance = widget.LowImportance
-	// container.NewCenter resizes its child to the child's own MinSize rather
-	// than the space available to it, so a wrapping Label placed directly
-	// inside one never learns how wide it's allowed to be and never wraps
-	// (this bit us on narrow/mobile screens with canvas.Text before, which
-	// can't wrap at all). VBox gives its children the container's full width,
-	// so the Label wraps correctly there; spacers reproduce the vertical
-	// centering container.NewCenter used to provide.
-	w.lockedContent = container.NewVBox(
-		layout.NewSpacer(),
-		view.NewInset(lockedMsg, 24, 24, 24, 24),
-		layout.NewSpacer(),
-	)
 
 	w.outerContainer = container.NewStack(w.normalContent)
 }
@@ -346,23 +350,13 @@ func (w *ScriptsTabWidget) refreshMCPStatus() {
 
 // ─── Scripts list ─────────────────────────────────────────────────────────────
 
-func (w *ScriptsTabWidget) showEmptyScriptsState() {
-	msg := canvas.NewText("Not connected", design.ColorTextMuted)
-	msg.TextSize = 13
-	msg.Alignment = fyne.TextAlignCenter
-	w.scriptsBodyContainer.Objects = []fyne.CanvasObject{
-		view.NewInset(container.NewCenter(msg), 20, 20, 20, 20),
-	}
-	w.scriptsBodyContainer.Refresh()
-}
-
 func (w *ScriptsTabWidget) refreshScriptsList() {
 	w.mu.Lock()
 	client := w.usbClient
 	w.mu.Unlock()
 
 	if client == nil {
-		fyne.Do(func() { w.showEmptyScriptsState() })
+		fyne.Do(func() { w.showScriptsLocked("Not connected") })
 		return
 	}
 

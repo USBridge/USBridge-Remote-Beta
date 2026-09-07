@@ -131,7 +131,12 @@ func (cm *ConnectionManager) refreshConnectionsList() {
 		cards = append(cards, cm.createConnectionGridCard(conn, i))
 		remoteOSValues = append(remoteOSValues, conn.RemoteOS)
 	}
-	cm.ui.SetRows(rows, cards, view.SummarizeConnections(remoteOSValues))
+
+	var editPanel fyne.CanvasObject
+	if cm.editingListIndex >= 0 && cm.editingListIndex < len(cm.connections) {
+		editPanel = cm.buildListEditPanel(cm.editingListIndex)
+	}
+	cm.ui.SetRows(rows, cards, view.SummarizeConnections(remoteOSValues), editPanel)
 	cm.notifyConnectionsState()
 }
 
@@ -199,7 +204,13 @@ func (cm *ConnectionManager) createConnectionRow(conn SavedConnection, idx int) 
 				if cm.connectionPending {
 					return
 				}
-				cm.showEditDialog(idx)
+				// Splits the List view instead of popping the modal
+				// (showEditDialog is now unused by List -- see
+				// buildListEditPanel/connection_manager_list_edit.go).
+				cm.editingListIndex = idx
+				fyne.Do(func() {
+					cm.refreshConnectionsList()
+				})
 			},
 			OnProtocolChange: func(label string) {
 				if cm.connectionPending {

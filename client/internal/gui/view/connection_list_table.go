@@ -10,8 +10,15 @@ package view
 // label under it) | STATE (KVM/Agent/Unknown, colored text) | NETWORK
 // (LAN/TS) | ROUTE BRIDGE (protocol picker) | ACTIONS (Connect). Modeled on
 // a reference screenshot -- widths/spacing are a first pass pending review,
-// same as every other screen here. The edit pencil still opens the modal
-// editor (ConnectionManager.showEditDialog) -- unchanged from before.
+// same as every other screen here.
+//
+// The edit pencil no longer opens the modal editor as an overlay -- it
+// switches the whole List view into a split layout (NewConnectionsListSplit):
+// the table (NETWORK/ACTIONS columns dropped, see buildConnectionsListTable)
+// docked left, the modal editor's own fields docked right in a plain panel
+// the controller builds (connection_manager_list_edit.go, since this
+// package can't import controller). "X" or Save/Delete on that panel exits
+// back to the normal full table.
 
 import (
 	"image/color"
@@ -34,13 +41,24 @@ type ConnectionListItem struct {
 	Actions ConnectionRowActions
 }
 
-// connectionListColumnWidths are the six columns' target widths in the
-// order NewConnectionsListTable/newConnectionListHeaderRow/
-// newConnectionListRow all build their cells in. 0 means "flexible, absorb
-// whatever room the fixed columns and gaps leave" -- only NAME does; the
-// header row and every data row share this (and connectionsTableRowLayout)
-// so columns line up across rows.
-var connectionListColumnWidths = []float32{32, 130, 70, 0, 100, 116}
+// connectionListColumnLabels/connectionListColumnWidths are the full
+// (non-editing) table's six columns, in the order
+// newConnectionListHeaderRow/newConnectionListRow build cells in. 0 means
+// "flexible, absorb whatever room the fixed columns and gaps leave" -- only
+// NETWORK does. connectionListCompactColumn{Labels,Widths} is the same
+// table with NETWORK and ACTIONS dropped -- used while a row is being
+// edited (see NewConnectionsListSplit): there's no room for them once the
+// table is squeezed into half the width, and Connect/the addresses aren't
+// relevant while editing anyway. Header and data rows always share
+// whichever pair is active (via connectionsTableRowLayout) so columns line
+// up.
+var (
+	connectionListColumnLabels = []string{"OS", "NAME", "STATE", "NETWORK", "ROUTE BRIDGE", "ACTIONS"}
+	connectionListColumnWidths = []float32{32, 130, 70, 0, 100, 116}
+
+	connectionListCompactColumnLabels = []string{"OS", "NAME", "STATE", "ROUTE BRIDGE"}
+	connectionListCompactColumnWidths = []float32{32, 0, 70, 100}
+)
 
 const connectionListColumnGap float32 = 16
 
@@ -48,6 +66,27 @@ const connectionListColumnGap float32 = 16
 // CanvasObject: a header row of column titles, then one row per item,
 // separated by hairline dividers, all inside a single card.
 func NewConnectionsListTable(items []ConnectionListItem) fyne.CanvasObject {
+	return buildConnectionsListTable(items, false)
+}
+
+// NewConnectionsListSplit is List's edit-mode layout: the table with its
+// NETWORK/ACTIONS columns dropped (buildConnectionsListTable's compact
+// mode) docked to the left half of a draggable HSplit, editPanel -- built
+// by the controller from the modal editor's own field constructors, since
+// this package can't import controller -- docked to the right half.
+func NewConnectionsListSplit(items []ConnectionListItem, editPanel fyne.CanvasObject) fyne.CanvasObject {
+	table := buildConnectionsListTable(items, true)
+	split := container.NewHSplit(table, editPanel)
+	split.Offset = 0.5
+	return split
+}
+
+func buildConnectionsListTable(items []ConnectionListItem, compact bool) fyne.CanvasObject {
+	labels, widths := connectionListColumnLabels, connectionListColumnWidths
+	if compact {
+		labels, widths = connectionListCompactColumnLabels, connectionListCompactColumnWidths
+	}
+
 	dividerColor := color.NRGBA{R: 0x29, G: 0x2d, B: 0x27, A: 0xff}
 	newDivider := func() fyne.CanvasObject {
 		sep := canvas.NewRectangle(dividerColor)
@@ -55,9 +94,9 @@ func NewConnectionsListTable(items []ConnectionListItem) fyne.CanvasObject {
 		return NewInset(sep, 0, 0, 2, 2)
 	}
 
-	children := []fyne.CanvasObject{newConnectionListHeaderRow()}
+	children := []fyne.CanvasObject{newConnectionListHeaderRow(labels, widths)}
 	for _, item := range items {
-		children = append(children, newDivider(), newConnectionListRow(item))
+		children = append(children, newDivider(), newConnectionListRow(item, widths, compact))
 	}
 	rowsCol := container.New(&tightStatsVBoxLayout{Gap: 0}, children...)
 
@@ -69,41 +108,44 @@ func NewConnectionsListTable(items []ConnectionListItem) fyne.CanvasObject {
 	return container.NewStack(bg, NewInset(rowsCol, 16, 16, 12, 12))
 }
 
-func newConnectionListHeaderRow() fyne.CanvasObject {
-	labels := []string{"OS", "NAME", "STATE", "NETWORK", "ROUTE BRIDGE", "ACTIONS"}
+func newConnectionListHeaderRow(labels []string, widths []float32) fyne.CanvasObject {
 	cells := make([]fyne.CanvasObject, len(labels))
 	for i, l := range labels {
 		t := canvas.NewText(l, design.ColorConnectionsSectionSubtitle)
 		t.TextSize = 9
 		t.TextStyle.Monospace = true
 
-		switch i {
-		case 0, 2:
+		switch l {
+		case "OS", "STATE":
 			t.Alignment = fyne.TextAlignCenter
-		case 4, 5:
+		case "ROUTE BRIDGE", "ACTIONS":
 			t.Alignment = fyne.TextAlignTrailing
 		}
 
 		cells[i] = t
 	}
-	return container.New(&connectionsTableRowLayout{Widths: connectionListColumnWidths, Gap: connectionListColumnGap}, cells...)
+	return container.New(&connectionsTableRowLayout{Widths: widths, Gap: connectionListColumnGap}, cells...)
 }
 
-func newConnectionListRow(item ConnectionListItem) fyne.CanvasObject {
+func newConnectionListRow(item ConnectionListItem, widths []float32, compact bool) fyne.CanvasObject {
 	data := item.Data
 	isAgent, isKVM := ClassifyConnectionRemoteOS(data.RemoteOS)
 
 	osCell := container.NewCenter(newConnectionCardStatusIndicator(data.RemoteOS))
 	nameCell := newConnectionListNameCell(data, item.Actions.OnEdit, isAgent, isKVM)
 	stateCell := container.NewCenter(newConnectionListStateCell(isAgent, isKVM))
-	networkCell := newConnectionListNetworkCell(data.LANAddress, data.TailscaleAddress)
 	routeCell := container.NewBorder(nil, nil, nil, newConnectionListRouteCell(data, item.Actions.OnProtocolChange, item.State))
-	actionsCell := container.NewBorder(nil, nil, nil, newConnectionListActionsCell(item))
 
-	row := container.New(&connectionsTableRowLayout{Widths: connectionListColumnWidths, Gap: connectionListColumnGap},
-		osCell, nameCell, stateCell, networkCell, routeCell, actionsCell)
+	cells := []fyne.CanvasObject{osCell, nameCell, stateCell}
+	if compact {
+		cells = append(cells, routeCell)
+	} else {
+		networkCell := newConnectionListNetworkCell(data.LANAddress, data.TailscaleAddress)
+		actionsCell := container.NewBorder(nil, nil, nil, newConnectionListActionsCell(item))
+		cells = append(cells, networkCell, routeCell, actionsCell)
+	}
 
-	return row
+	return container.New(&connectionsTableRowLayout{Widths: widths, Gap: connectionListColumnGap}, cells...)
 }
 
 func newConnectionListNameCell(data ConnectionRowData, onEdit func(), isAgent, isKVM bool) fyne.CanvasObject {

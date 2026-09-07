@@ -51,6 +51,11 @@ type ConnectionManagerUI struct {
 	lastCards   []fyne.CanvasObject
 	lastSummary ConnectionsSummary
 	hasRows     bool
+
+	// editPanel, when non-nil, switches List mode into its split-edit
+	// layout (NewConnectionsListSplit) instead of the plain table
+	// (NewConnectionsListTable) -- see SetRows.
+	editPanel fyne.CanvasObject
 }
 
 type ConnectionRowData struct {
@@ -386,8 +391,13 @@ func (ui *ConnectionManagerUI) applyConnectionsContent() {
 		ui.ConnectionsBox.Add(grid)
 	} else if len(ui.lastRows) > 0 {
 		// One shared table (NewConnectionsListTable), not one card per
-		// connection -- see connection_list_table.go.
-		ui.ConnectionsBox.Add(NewConnectionsListTable(ui.lastRows))
+		// connection -- see connection_list_table.go. editPanel switches to
+		// the split edit layout instead (NewConnectionsListSplit).
+		if ui.editPanel != nil {
+			ui.ConnectionsBox.Add(NewConnectionsListSplit(ui.lastRows, ui.editPanel))
+		} else {
+			ui.ConnectionsBox.Add(NewConnectionsListTable(ui.lastRows))
+		}
 	}
 	ui.ConnectionsBox.Refresh()
 }
@@ -648,11 +658,15 @@ func (l *emptyStatePromoTitleLayout) MinSize(objects []fyne.CanvasObject) fyne.S
 // fresh call from the controller. cards may be nil/empty until the caller
 // wires up grid-card construction; the toggle then just has nothing to show
 // in grid mode yet.
-func (ui *ConnectionManagerUI) SetRows(rows []ConnectionListItem, cards []fyne.CanvasObject, summary ConnectionsSummary) {
+// editPanel is non-nil while List is in its split-edit layout (see
+// NewConnectionsListSplit/ConnectionManagerUI.editPanel) -- nil the rest of
+// the time.
+func (ui *ConnectionManagerUI) SetRows(rows []ConnectionListItem, cards []fyne.CanvasObject, summary ConnectionsSummary, editPanel fyne.CanvasObject) {
 	ui.lastRows = rows
 	ui.lastCards = cards
 	ui.lastSummary = summary
 	ui.hasRows = true
+	ui.editPanel = editPanel
 	ui.applyConnectionsContent()
 
 	header, buttons := newConnectionsHeader(summary, ui.headerActions, ui.viewMode)

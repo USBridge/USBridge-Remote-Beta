@@ -55,9 +55,17 @@ type ConnectionManager struct {
 	// editingGridIndex is the connections slice index of the Grid-mode card
 	// currently showing its inline edit layout (see
 	// connection_grid_card.go's ConnectionRowState.Editing), or -1 when no
-	// card is being edited. List mode ignores this entirely -- its pencil
-	// always opens the modal editor (showEditDialog).
+	// card is being edited. Grid and List each track their own edit target
+	// independently (editingListIndex is List's) since the two view modes
+	// can't both be showing at once anyway.
 	editingGridIndex int
+	// editingListIndex is the connections slice index of the List row
+	// currently shown in the split-edit layout (see
+	// connection_list_table.go's NewConnectionsListSplit and
+	// connection_manager_list_edit.go's buildListEditPanel), or -1 when
+	// List is showing its normal full table. The old modal editor
+	// (showEditDialog) is unused now that List's pencil drives this instead.
+	editingListIndex int
 
 	hostEntry      *widget.Entry
 	masterKeyEntry *widget.Entry
@@ -170,6 +178,7 @@ func NewConnectionManager(app fyne.App, window fyne.Window, config *models.AppCo
 		connections:           make([]SavedConnection, 0),
 		activeConnectionIndex: -1,
 		editingGridIndex:      -1,
+		editingListIndex:      -1,
 		ts:                    ts,
 	}
 	if cm.ts == nil {

@@ -978,6 +978,13 @@ func resolveHostForDialog(protocol, internalHost, tailscaleHost string) string {
 	}
 }
 
+// showEditDialog was List mode's pencil action -- opening this as a popup
+// overlay. List now uses the split-edit layout instead (see
+// connection_manager_list_edit.go's buildListEditPanel), so this has no
+// callers left. Left in place rather than deleted in the same pass that
+// introduced its replacement; showConnectionEditorDialog/
+// showAdaptiveConnectionDialog underneath it are still very much alive --
+// showPrefilledAddDialog (Add-connection) uses them too.
 func (cm *ConnectionManager) showEditDialog(idx int) {
 	if idx < 0 || idx >= len(cm.connections) {
 		return
@@ -1308,6 +1315,7 @@ func (cm *ConnectionManager) handleDeleteConnection(idx int, afterDelete func())
 			cm.connections = append(cm.connections[:idx], cm.connections[idx+1:]...)
 			cm.selectedIndex = -1
 			cm.editingGridIndex = -1
+			cm.editingListIndex = -1
 			cm.saveConnections()
 			fyne.Do(func() {
 				cm.applyConnectionToForm("", "", "")

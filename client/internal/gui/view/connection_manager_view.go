@@ -47,17 +47,27 @@ type ConnectionManagerUI struct {
 	// (setViewMode) can swap ConnectionsBox's content without needing a
 	// fresh call from the controller.
 	viewMode    string
-	lastRows    []*fyne.Container
+	lastRows    []ConnectionListItem
 	lastCards   []fyne.CanvasObject
 	lastSummary ConnectionsSummary
 	hasRows     bool
 }
 
 type ConnectionRowData struct {
-	Name            string
-	AddressSummary  string
-	ProtocolBadge   string
-	ProtocolOptions []string
+	Name string
+	// AddressSummary is a pre-formatted "LAN: x\nTS: y" block -- the old
+	// per-row NewConnectionRow's own display string, unused by the List
+	// table (NewConnectionsListTable), which renders LANAddress/
+	// TailscaleAddress separately instead. Kept for now since
+	// NewConnectionRow itself is still here, just no longer called.
+	AddressSummary string
+	// LANAddress/TailscaleAddress back the List table's NETWORK column --
+	// same split values ConnectionCardData.LANAddress/TailscaleAddress use
+	// for the Grid card's equivalent box.
+	LANAddress       string
+	TailscaleAddress string
+	ProtocolBadge    string
+	ProtocolOptions  []string
 	// HideProtocolSelector omits the AUTO/TS/LAN dropdown entirely (set by
 	// the controller on wasm -- see connection_manager_ui.go's
 	// createConnectionRow) instead of just disabling it: a browser tab has
@@ -374,10 +384,10 @@ func (ui *ConnectionManagerUI) applyConnectionsContent() {
 		cellSize := fyne.NewSize(connectionCardWidth+gap, connectionCardHeight+gap)
 		grid := container.NewGridWrap(cellSize, padded...)
 		ui.ConnectionsBox.Add(grid)
-	} else {
-		for _, row := range ui.lastRows {
-			ui.ConnectionsBox.Add(row)
-		}
+	} else if len(ui.lastRows) > 0 {
+		// One shared table (NewConnectionsListTable), not one card per
+		// connection -- see connection_list_table.go.
+		ui.ConnectionsBox.Add(NewConnectionsListTable(ui.lastRows))
 	}
 	ui.ConnectionsBox.Refresh()
 }
@@ -638,7 +648,7 @@ func (l *emptyStatePromoTitleLayout) MinSize(objects []fyne.CanvasObject) fyne.S
 // fresh call from the controller. cards may be nil/empty until the caller
 // wires up grid-card construction; the toggle then just has nothing to show
 // in grid mode yet.
-func (ui *ConnectionManagerUI) SetRows(rows []*fyne.Container, cards []fyne.CanvasObject, summary ConnectionsSummary) {
+func (ui *ConnectionManagerUI) SetRows(rows []ConnectionListItem, cards []fyne.CanvasObject, summary ConnectionsSummary) {
 	ui.lastRows = rows
 	ui.lastCards = cards
 	ui.lastSummary = summary
@@ -699,6 +709,14 @@ var (
 	_ fyne.Widget       = (*ConnectionPrimaryButton)(nil)
 )
 
+// NewConnectionRow built List mode's old per-connection card (its own
+// bordered/shadowed panel per row, name+address stacked in one block). List
+// now renders NewConnectionsListTable instead (connection_list_table.go) --
+// one shared card with column headers -- so this and its support types
+// (connectionNameButton, connectionCompactContentLayout, etc.) are unused.
+// Left in place rather than deleted in the same pass that introduced its
+// replacement; safe to remove once the table design is confirmed to be a
+// keeper.
 func NewConnectionRow(data ConnectionRowData, state ConnectionRowState, actions ConnectionRowActions) *fyne.Container {
 	nameBlock := newConnectionNameButton(data.Name, data.AddressSummary, data.RemoteOS, actions.OnEdit)
 	nameBlock.SetDisabled(state.Disabled)

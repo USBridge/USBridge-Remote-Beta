@@ -123,7 +123,7 @@ func (cm *ConnectionManager) refreshConnectionsList() {
 		return
 	}
 
-	rows := make([]*fyne.Container, 0, len(cm.connections))
+	rows := make([]view.ConnectionListItem, 0, len(cm.connections))
 	cards := make([]fyne.CanvasObject, 0, len(cm.connections))
 	remoteOSValues := make([]string, 0, len(cm.connections))
 	for i, conn := range cm.connections {
@@ -135,7 +135,7 @@ func (cm *ConnectionManager) refreshConnectionsList() {
 	cm.notifyConnectionsState()
 }
 
-func (cm *ConnectionManager) createConnectionRow(conn SavedConnection, idx int) *fyne.Container {
+func (cm *ConnectionManager) createConnectionRow(conn SavedConnection, idx int) view.ConnectionListItem {
 	conn.Protocol = normalizeConnectionProtocol(conn.Protocol)
 	internalHost, tailscaleHost := classifyConnectionHosts(conn)
 	rowState := view.ConnectionRowState{
@@ -153,11 +153,13 @@ func (cm *ConnectionManager) createConnectionRow(conn SavedConnection, idx int) 
 		})
 	}
 
-	return view.NewConnectionRow(
-		view.ConnectionRowData{
-			Name:           conn.Name,
-			AddressSummary: formatConnectionAddressSummary(internalHost, tailscaleHost),
-			ProtocolBadge:  connectionProtocolBadge(conn.Protocol),
+	return view.ConnectionListItem{
+		Data: view.ConnectionRowData{
+			Name:             conn.Name,
+			AddressSummary:   formatConnectionAddressSummary(internalHost, tailscaleHost),
+			LANAddress:       internalHost,
+			TailscaleAddress: tailscaleHost,
+			ProtocolBadge:    connectionProtocolBadge(conn.Protocol),
 			ProtocolOptions: []string{
 				connectionProtocolBadge(models.ConnectionProtocolAuto),
 				connectionProtocolBadge(models.ConnectionProtocolTailscale),
@@ -173,8 +175,8 @@ func (cm *ConnectionManager) createConnectionRow(conn SavedConnection, idx int) 
 			RegisterVisible:      tailscaleRegisterUISupported() && internalHost != "" && tailscaleHost == "",
 			RemoteOS:             conn.RemoteOS,
 		},
-		rowState,
-		view.ConnectionRowActions{
+		State: rowState,
+		Actions: view.ConnectionRowActions{
 			OnSelect: fillForm,
 			OnUse: func() {
 				if !cm.beginConnectionFromRow(idx) {
@@ -217,7 +219,7 @@ func (cm *ConnectionManager) createConnectionRow(conn SavedConnection, idx int) 
 				}
 			},
 		},
-	)
+	}
 }
 
 // createConnectionGridCard builds the same connection's Grid-mode card

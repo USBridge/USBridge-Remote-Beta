@@ -1,4 +1,4 @@
-﻿package controller
+package controller
 
 import (
 	"fmt"
@@ -89,11 +89,11 @@ const (
 	connectionDialogSecondaryIconSize    = float32(18)
 	connectionDialogSecondaryCompactIcon = float32(12)
 	connectionDialogSecondaryTextSize    = float32(16)
-	connectionDialogSecondaryCompactText = float32(11)
+	connectionDialogSecondaryCompactText = float32(9.5)
 	connectionDialogSecondaryHeight      = float32(36)
-	connectionDialogSecondaryCompactH    = float32(26)
+	connectionDialogSecondaryCompactH    = float32(32)
 	connectionDialogSecondaryPadX        = float32(16) // each side
-	connectionDialogSecondaryCompactPadX = float32(12)
+	connectionDialogSecondaryCompactPadX = float32(15)
 )
 
 func (b *connectionDialogSecondaryButton) iconSize() float32 {
@@ -225,7 +225,7 @@ func newConnectionDialogAccentButton(label string, icon fyne.Resource, onTapped 
 
 func (b *connectionDialogSecondaryButton) iconLabelGap() float32 {
 	if b.compact {
-		return 4
+		return 0
 	}
 	return 6
 }
@@ -460,21 +460,23 @@ func (r *connectionDialogRegisterRow) CreateRenderer() fyne.WidgetRenderer {
 	r.checkMark.FillMode = canvas.ImageFillContain
 
 	r.labelTxt = canvas.NewText(r.label, design.ColorTextLight)
-	r.labelTxt.TextSize = 13
+	r.labelTxt.TextSize = 12
 	r.labelTxt.TextStyle.Bold = true
 
-	r.dot = canvas.NewCircle(design.ColorConnectionAddFill)
+	// Dot removed
+	r.dot = canvas.NewCircle(color.Transparent)
+	r.dot.Hide()
 
-	r.subTxt = canvas.NewText(r.sublabel, design.ColorTextMuted)
-	r.subTxt.TextSize = 10
+	r.subTxt = canvas.NewText(r.sublabel, color.NRGBA{R: 0xc3, G: 0xc6, B: 0xb4, A: 0xff})
+	r.subTxt.TextSize = 8
 
 	r.badgeBg = canvas.NewRectangle(color.Transparent)
-	r.badgeBg.CornerRadius = design.RadiusMD
+	r.badgeBg.CornerRadius = 4
 	r.badgeBg.StrokeColor = design.ColorConnectionBadgeText
 	r.badgeBg.StrokeWidth = 1
 
 	r.badgeTxt = canvas.NewText(r.badge, design.ColorConnectionBadgeText)
-	r.badgeTxt.TextSize = 9
+	r.badgeTxt.TextSize = 8
 	r.badgeTxt.TextStyle = fyne.TextStyle{Bold: true, Monospace: true}
 
 	r.refreshVisuals()
@@ -522,13 +524,13 @@ func (rr *connectionDialogRegisterRowRenderer) Layout(size fyne.Size) {
 	textX := registerRowPadding + registerRowCheckSize + 12
 
 	badgeMin := r.badgeTxt.MinSize()
-	badgeW := badgeMin.Width + 20
-	badgeH := float32(20)
+	badgeW := badgeMin.Width + 16
+	badgeH := float32(18)
 	badgeX := size.Width - registerRowPadding - badgeW
 	badgeY := (size.Height - badgeH) / 2
 	r.badgeBg.Move(fyne.NewPos(badgeX, badgeY))
 	r.badgeBg.Resize(fyne.NewSize(badgeW, badgeH))
-	r.badgeTxt.Move(fyne.NewPos(badgeX+10, badgeY+(badgeH-badgeMin.Height)/2))
+	r.badgeTxt.Move(fyne.NewPos(badgeX+8, badgeY+(badgeH-badgeMin.Height)/2))
 	r.badgeTxt.Resize(badgeMin)
 
 	textMaxX := badgeX - 12
@@ -586,7 +588,7 @@ func buildConnectionDialogForm(statsBox fyne.CanvasObject, registerCheck fyne.Ca
 		statsBox,
 	}
 	if registerCheck != nil {
-		items = append(items, view.NewInset(registerCheck, 10, 0, 0, 0))
+		items = append(items, view.NewInset(registerCheck, 0, 0, 10, 10))
 	}
 	return container.NewVBox(items...)
 }
@@ -751,15 +753,80 @@ type mutedForegroundTheme struct{ fyne.Theme }
 
 func (t *mutedForegroundTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
 	if name == theme.ColorNameForeground {
-		return design.ColorTextMuted
+		return color.NRGBA{R: 0xc3, G: 0xc6, B: 0xb4, A: 0xff}
 	}
 	return t.Theme.Color(name, variant)
 }
 
-func showAdaptiveConnectionDialog(parent fyne.Window, dialogTitle, subtitle string, headerIcon fyne.Resource, feedback fyne.CanvasObject, form fyne.CanvasObject, connectBtn, saveBtn, deleteBtn fyne.CanvasObject, footer ...fyne.CanvasObject) *widget.PopUp {
-	title := view.NewBrandText(dialogTitle, 17, design.ColorTextLight, true)
+func (t *mutedForegroundTheme) Size(name fyne.ThemeSizeName) float32 {
+	if name == theme.SizeNameText {
+		return 8 // Smaller subtitle text
+	}
+	return t.Theme.Size(name)
+}
 
-	closeBtn := newConnectionDialogIconButton(theme.CancelIcon(), nil)
+type subtitleLeftNudgeLayout struct {
+	Amount float32
+}
+
+func (l *subtitleLeftNudgeLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	if len(objects) == 0 {
+		return fyne.NewSize(0, 0)
+	}
+	min := objects[0].MinSize()
+	return fyne.NewSize(min.Width-l.Amount, min.Height)
+}
+
+func (l *subtitleLeftNudgeLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	if len(objects) == 0 {
+		return
+	}
+	objects[0].Resize(fyne.NewSize(size.Width+l.Amount, size.Height))
+	objects[0].Move(fyne.NewPos(-l.Amount, 0))
+}
+
+type tightHeaderVBoxLayout struct {
+	Gap float32
+}
+
+func (l *tightHeaderVBoxLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	var width, height float32
+	var count int
+	for _, obj := range objects {
+		if !obj.Visible() {
+			continue
+		}
+		count++
+		min := obj.MinSize()
+		if min.Width > width {
+			width = min.Width
+		}
+		height += min.Height
+	}
+	if count > 1 {
+		height += float32(count-1) * l.Gap
+	}
+	return fyne.NewSize(width, height)
+}
+
+func (l *tightHeaderVBoxLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	var y float32
+	for _, obj := range objects {
+		if !obj.Visible() {
+			continue
+		}
+		min := obj.MinSize()
+		obj.Resize(fyne.NewSize(size.Width, min.Height))
+		obj.Move(fyne.NewPos(0, y))
+		y += min.Height + l.Gap
+	}
+}
+
+func showAdaptiveConnectionDialog(parent fyne.Window, dialogTitle, subtitle string, headerIcon fyne.Resource, feedback fyne.CanvasObject, form fyne.CanvasObject, connectBtn, saveBtn, deleteBtn fyne.CanvasObject, footer ...fyne.CanvasObject) *widget.PopUp {
+	title := view.NewBrandText(dialogTitle, 13, design.ColorTextLight, true)
+
+	cancelRes := fyne.NewStaticResource("dialog_cancel.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#8f9381"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>`))
+	closeBtn := newConnectionDialogIconButton(cancelRes, nil)
 
 	var titleCol fyne.CanvasObject = title
 	if strings.TrimSpace(subtitle) != "" {
@@ -773,7 +840,8 @@ func showAdaptiveConnectionDialog(parent fyne.Window, dialogTitle, subtitle stri
 		subtitleLbl := widget.NewLabel(subtitle)
 		subtitleLbl.Wrapping = fyne.TextWrapWord
 		subtitleThemed := container.NewThemeOverride(subtitleLbl, &mutedForegroundTheme{design.NewBrandTheme()})
-		titleCol = container.NewVBox(title, subtitleThemed)
+		nudgedSubtitle := container.New(&subtitleLeftNudgeLayout{Amount: 8}, subtitleThemed)
+		titleCol = container.New(&tightHeaderVBoxLayout{Gap: -2}, title, nudgedSubtitle)
 	}
 
 	// titleCol renders as-is here, not container.NewCenter(titleCol) --
@@ -827,9 +895,10 @@ func showAdaptiveConnectionDialog(parent fyne.Window, dialogTitle, subtitle stri
 	// not full-width ones.
 	cancelBtn := &connectionDialogSecondaryButton{
 		labelText:      i18n.Current.Cancel,
+		compact:        true,
 		fillColor:      color.Transparent,
 		borderColor:    color.Transparent,
-		textColor:      design.ColorTextMuted,
+		textColor:      color.NRGBA{R: 0x8f, G: 0x93, B: 0x81, A: 0xff},
 		hoverFillColor: color.Transparent,
 		hoverTextColor: design.ColorTextLight,
 	}
@@ -878,8 +947,11 @@ func showAdaptiveConnectionDialog(parent fyne.Window, dialogTitle, subtitle stri
 	border.StrokeColor = design.ColorBorder
 	border.StrokeWidth = 1
 
-	sep := canvas.NewRectangle(design.ColorTailscaleChipBorder)
+	sep := canvas.NewRectangle(color.NRGBA{R: 0x30, G: 0x34, B: 0x2e, A: 0xff})
 	sep.SetMinSize(fyne.NewSize(0, 1))
+
+	sepFooter := canvas.NewRectangle(color.NRGBA{R: 0x30, G: 0x34, B: 0x2e, A: 0xff})
+	sepFooter.SetMinSize(fyne.NewSize(0, 1))
 
 	// Panel layout: title fixed at top, buttons fixed at bottom, scroll fills
 	// center. titleBar/buttons/scroll each carry their own 18px left/right
@@ -897,10 +969,16 @@ func showAdaptiveConnectionDialog(parent fyne.Window, dialogTitle, subtitle stri
 	// right=44 (not 18): reserves clearance so title/subtitle text never
 	// runs under closeBtn, which -- see cornerBtn below -- sits closer to
 	// the panel's actual corner than this 18px content margin reaches.
-	headerBlock := container.NewVBox(topAccent, view.NewInset(titleBar, 18, 44, 18, 10), sep)
+	headerBlock := container.New(&tightHeaderVBoxLayout{Gap: 0}, topAccent, view.NewInset(titleBar, 21, 44, 9, 4), sep)
+
+	footerBlock := container.NewVBox(
+		sepFooter,
+		view.NewInset(buttons, 12, 18, 14, 0),
+	)
+
 	inner := container.NewBorder(
 		headerBlock,
-		view.NewInset(buttons, 18, 18, 14, 0),
+		footerBlock,
 		nil, nil,
 		view.NewInset(scroll, 18, 18, 0, 0),
 	)
@@ -914,7 +992,7 @@ func showAdaptiveConnectionDialog(parent fyne.Window, dialogTitle, subtitle stri
 	// -- NewInset's Border-based padding would stretch closeBtn itself to
 	// fill that whole box instead of leaving it at its own natural size in
 	// the corner.
-	cornerBtn := container.New(&dialogCornerButtonLayout{Top: 10, Right: 12}, closeBtn)
+	cornerBtn := container.New(&dialogCornerButtonLayout{Top: 12, Right: 12}, closeBtn)
 	panel := container.NewStack(
 		bg,
 		view.NewInset(inner, 0, 0, 0, 16),
@@ -951,6 +1029,56 @@ func showAdaptiveConnectionDialog(parent fyne.Window, dialogTitle, subtitle stri
 	return popup
 }
 
+type gapTwoColumnsLayout struct {
+	Gap float32
+}
+
+func (l *gapTwoColumnsLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	var maxW, maxH float32
+	var count int
+	for _, obj := range objects {
+		if !obj.Visible() {
+			continue
+		}
+		count++
+		min := obj.MinSize()
+		if min.Width > maxW {
+			maxW = min.Width
+		}
+		if min.Height > maxH {
+			maxH = min.Height
+		}
+	}
+	width := maxW * float32(count)
+	if count > 1 {
+		width += float32(count-1) * l.Gap
+	}
+	return fyne.NewSize(width, maxH)
+}
+
+func (l *gapTwoColumnsLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	var count int
+	for _, obj := range objects {
+		if obj.Visible() {
+			count++
+		}
+	}
+	if count == 0 {
+		return
+	}
+
+	colW := (size.Width - float32(count-1)*l.Gap) / float32(count)
+	x := float32(0)
+	for _, obj := range objects {
+		if !obj.Visible() {
+			continue
+		}
+		obj.Resize(fyne.NewSize(colW, size.Height))
+		obj.Move(fyne.NewPos(x, 0))
+		x += colW + l.Gap
+	}
+}
+
 func showConnectionEditorDialog(parent fyne.Window, window fyne.Window, spec connectionDialogSpec) *widget.PopUp {
 	// The same Name/LAN/TS/Token box (labels, placeholders, copy/paste
 	// icons, dark styling) the Grid card's inline edit and List's split-edit
@@ -965,9 +1093,9 @@ func showConnectionEditorDialog(parent fyne.Window, window fyne.Window, spec con
 
 	registerCheck := newConnectionDialogRegisterRow(
 		spec.tailscaleRegisterValue && tailscaleRegisterUISupported(),
-		i18n.Current.TailscaleRegisterLabel,
-		"DERP encrypted tunnel mesh with NAT traversal",
-		"AUTO-DISCOVER",
+		"Tailscale",
+		"After connection, the redirect will open on the web.",
+		"AUTO-REGISTRATION",
 		nil,
 	)
 	registerCheckContainer := container.NewVBox(registerCheck)
@@ -1008,7 +1136,7 @@ func showConnectionEditorDialog(parent fyne.Window, window fyne.Window, spec con
 		// natural/content width -- they should span the same width as the
 		// fields below them; compact keeps their icon/text/height small
 		// regardless of how wide the button box around that content ends up.
-		iconRow := container.NewGridWithColumns(2, qrBtn, linkBtn)
+		iconRow := container.New(&gapTwoColumnsLayout{Gap: 9}, qrBtn, linkBtn)
 
 		if view.UseCompactLayout(parent.Canvas().Size().Width) {
 			// On Android/narrow browser viewports: icon row floats OUTSIDE
@@ -1057,40 +1185,57 @@ func showConnectionEditorDialog(parent fyne.Window, window fyne.Window, spec con
 		if connectLabel == "" {
 			connectLabel = i18n.Current.DeepLinkConnect
 		}
-		btn := newConnectionDialogPrimaryButton(connectLabel, spec.connectIcon, func() {
-			if spec.onConnect != nil && !spec.onConnect(nameEntry.Text, lanEntry.Text, tsEntry.Text, tokenEntry.Text, registerCheck.Checked) {
-				return
-			}
-			if d != nil {
-				d.Hide()
-			}
-		})
-		connectBtn = btn
+		cIcon := spec.connectIcon
+		if cIcon == nil {
+			cIcon = assets.ConnectIcon
+		}
+		cBtn := &connectionDialogSecondaryButton{
+			labelText: connectLabel,
+			onTapped: func() {
+				if spec.onConnect != nil && !spec.onConnect(nameEntry.Text, lanEntry.Text, tsEntry.Text, tokenEntry.Text, registerCheck.Checked) {
+					return
+				}
+				if d != nil {
+					d.Hide()
+				}
+			},
+			compact:          true,
+			fillColor:        color.NRGBA{R: 0x22, G: 0x26, B: 0x2a, A: 0xff},
+			borderColor:      design.ColorTailscaleChipBorder,
+			textColor:        design.ColorConnectionAddFill,
+			hoverFillColor:   color.NRGBA{R: 0x31, G: 0x35, B: 0x39, A: 0xff},
+			hoverTextColor:   design.ColorConnectionAddFill,
+			hoverBorderColor: design.ColorConnectionAddFill,
+			iconRes:          cIcon,
+			hoverIconRes:     cIcon,
+		}
+		cBtn.ExtendBaseWidget(cBtn)
+		connectBtn = cBtn
 	}
 
-	btn := view.NewConnectionPrimaryButton(saveLabel, func() {
-		if spec.onSave != nil && !spec.onSave(nameEntry.Text, lanEntry.Text, tsEntry.Text, tokenEntry.Text, registerCheck.Checked) {
-			return
-		}
-		if d != nil {
-			d.Hide()
-		}
-	})
-	btn.SetAccent(true)
-	saveBtn = btn
-
-	if spec.onConnect != nil && spec.onDelete == nil {
-		btn := view.NewConnectionPrimaryButton(saveLabel, func() {
+	sIcon := fyne.NewStaticResource("floppy-disk.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#111111" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>`))
+	sBtn := &connectionDialogSecondaryButton{
+		labelText: saveLabel,
+		onTapped: func() {
 			if spec.onSave != nil && !spec.onSave(nameEntry.Text, lanEntry.Text, tsEntry.Text, tokenEntry.Text, registerCheck.Checked) {
 				return
 			}
 			if d != nil {
 				d.Hide()
 			}
-		})
-		btn.SetAccent(true)
-		saveBtn = btn
+		},
+		compact:          true,
+		fillColor:        design.ColorConnectionBadgeText,
+		borderColor:      color.Transparent,
+		textColor:        design.ColorGray950,
+		hoverFillColor:   color.NRGBA{R: 0x61, G: 0xf0, B: 0xd3, A: 0xff},
+		hoverTextColor:   design.ColorGray950,
+		hoverBorderColor: color.Transparent,
+		iconRes:          sIcon,
+		hoverIconRes:     sIcon,
 	}
+	sBtn.ExtendBaseWidget(sBtn)
+	saveBtn = sBtn
 
 	if spec.onDelete != nil {
 		btn := newConnectionDialogDangerSecondaryButton(deleteLabel, theme.DeleteIcon(), func() {
@@ -1123,7 +1268,7 @@ func newConnectionDialogWideActionButton(label string, iconRes fyne.Resource, ho
 		fillColor:        color.Transparent,
 		borderColor:      design.ColorTailscaleChipBorder,
 		textColor:        design.ColorTextLight,
-		hoverFillColor:   design.ColorSurfaceLight,
+		hoverFillColor:   color.NRGBA{R: 0x26, G: 0x2a, B: 0x2e, A: 0xff},
 		hoverTextColor:   design.ColorTextLight,
 		hoverBorderColor: hoverBorder,
 		iconRes:          iconRes,
@@ -1136,10 +1281,10 @@ func newConnectionDialogWideActionButton(label string, iconRes fyne.Resource, ho
 // newConnectionDialogManualDivider is the "OR ENTER MANUALLY" line
 // separating the QR/Paste shortcuts from the fields they'd otherwise fill.
 func newConnectionDialogManualDivider() fyne.CanvasObject {
-	line := canvas.NewRectangle(design.ColorTailscaleChipBorder)
+	line := canvas.NewRectangle(color.NRGBA{R: 0x30, G: 0x34, B: 0x2e, A: 0xff})
 	line.SetMinSize(fyne.NewSize(1, 1))
 
-	label := canvas.NewText("OR ENTER MANUALLY", design.ColorTextMuted)
+	label := canvas.NewText("OR ENTER MANUALLY", color.NRGBA{R: 0x8f, G: 0x93, B: 0x81, A: 0xff})
 	label.TextSize = 9
 	label.TextStyle = fyne.TextStyle{Monospace: true}
 
@@ -1429,6 +1574,7 @@ type connectionDialogIconButton struct {
 	iconSize   fyne.Size
 
 	bg   *canvas.Rectangle
+	bdr  *canvas.Rectangle
 	icon *canvas.Image
 }
 
@@ -1487,25 +1633,31 @@ func (b *connectionDialogIconButton) CreateRenderer() fyne.WidgetRenderer {
 	b.bg = canvas.NewRectangle(color.Transparent)
 	b.bg.CornerRadius = 6
 
+	b.bdr = canvas.NewRectangle(color.Transparent)
+	b.bdr.CornerRadius = 6
+	b.bdr.StrokeWidth = 1
+
 	b.icon = canvas.NewImageFromResource(b.resource)
 	b.icon.FillMode = canvas.ImageFillContain
 	b.icon.ScaleMode = canvas.ImageScaleSmooth
 	b.icon.SetMinSize(b.iconSize)
 
 	b.refreshVisuals()
-	return widget.NewSimpleRenderer(container.NewMax(b.bg, container.NewCenter(b.icon)))
+	return widget.NewSimpleRenderer(container.NewMax(b.bg, b.bdr, container.NewCenter(b.icon)))
 }
 
 func (b *connectionDialogIconButton) refreshVisuals() {
-	if b.bg == nil || b.icon == nil {
+	if b.bg == nil || b.bdr == nil || b.icon == nil {
 		return
 	}
 
 	b.bg.FillColor = color.Transparent
+	b.bdr.StrokeColor = color.Transparent
 	b.icon.Resource = b.resource
 	b.icon.Translucency = 0.32
 	if b.hovered {
 		b.bg.FillColor = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0x10}
+		b.bdr.StrokeColor = color.NRGBA{R: 0x8f, G: 0x93, B: 0x81, A: 0xff}
 		b.icon.Translucency = 0.08
 	}
 

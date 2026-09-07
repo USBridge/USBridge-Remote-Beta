@@ -214,12 +214,18 @@ func maybeKickIconDetection(rgba []byte, w, h, stride int) {
 }
 
 // maybeKickOCR copies the current frame and runs icons+text, restricted to
-// text near a detected icon (localui.Parser.ParseFastNearIcons -- see its
-// doc comment for why this is the right tradeoff for a live preview
-// specifically, and not for MCP's ui.parse), on a background goroutine, at
-// most once per aiVisionOCRInterval and never while a previous OCR pass is
-// still running. Independent of maybeKickIconDetection above -- see the
-// package doc comment.
+// text near a detected icon (localui.Parser.ParseFastNearIconsStaged -- see
+// ParseFastNearIcons's doc comment for why this filter is the right
+// tradeoff for a live preview specifically, and not for MCP's ui.parse),
+// on a background goroutine, at most once per aiVisionOCRInterval and
+// never while a previous OCR pass is still running. Independent of
+// maybeKickIconDetection above -- see the package doc comment.
+//
+// Uses the *Staged variant so dbnet's box positions (cheap, ~1-2s) publish
+// as soon as they're ready, before svtr's OCR (the actual 8-11s cost) even
+// starts -- otherwise green boxes wait on the slowest sub-stage of the
+// slowest loop for no reason: detecting *where* text is doesn't need to
+// wait on reading *what* it says.
 func maybeKickOCR(rgba []byte, w, h, stride int) {
 	now := time.Now().UnixNano()
 	if now-aiVisionOCRLastRun.Load() < int64(aiVisionOCRInterval) {
@@ -246,12 +252,25 @@ func maybeKickOCR(rgba []byte, w, h, stride int) {
 			logrus.Warnf("🔎 [AI Vision] OCR frame encode failed: %v", err)
 			return
 		}
-		result, err := parser.ParseFastNearIcons(buf.Bytes())
+		b := frame.Bounds()
+		result, err := parser.ParseFastNearIconsStaged(buf.Bytes(), func(boxes []localui.Box) {
+			// Fires as soon as dbnet (+ the near-icons filter) is done --
+			// well before svtr recognizes any of these boxes' text. No ID,
+			// no recognized string yet (see ParseFastNearIconsStaged's doc
+			// comment) -- drawCachedOverlay/buildAIVisionOverlayImage skip
+			// the Set-of-Mark tag for a placeholder (empty ID) and draw
+			// just the green outline, so the operator sees "text detected
+			// here" immediately instead of nothing for another 8-11s.
+			placeholders := make([]localui.TextRegion, len(boxes))
+			for i, box := range boxes {
+				placeholders[i] = localui.TextRegion{Bbox: box}
+			}
+			publishAIVisionText(placeholders, b.Dx(), b.Dy())
+		})
 		if err != nil {
 			logrus.Warnf("🔎 [AI Vision] detection pass failed: %v", err)
 			return
 		}
-		b := frame.Bounds()
 		// Publish only the text: this pass's own icons came from whatever
 		// frame it started on, which by the time OCR finishes (multiple
 		// seconds later, see the package doc comment) is stale next to
@@ -338,6 +357,12 @@ func drawCachedOverlay(rgba []byte, w, h, stride int) {
 	}
 	for _, t := range result.Text {
 		localui.DrawDetectionBox(img, t.Bbox, true)
-		localui.DrawDetectionTag(img, t.ID, t.Bbox)
+		if t.ID != "" {
+			// Empty ID means maybeKickOCR's onTextBoxes fired but svtr
+			// hasn't recognized this box yet (see ParseFastNearIconsStaged) --
+			// draw the outline only, no Set-of-Mark tag for a box that
+			// doesn't have one yet.
+			localui.DrawDetectionTag(img, t.ID, t.Bbox)
+		}
 	}
 }

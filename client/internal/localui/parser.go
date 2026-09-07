@@ -129,7 +129,7 @@ func (p *Parser) Close() {
 // plus the structured result, in the same shape as the device's own
 // ui.parse response (see types.go).
 func (p *Parser) Parse(imgBytes []byte) (markedPNG []byte, result *Result, err error) {
-	return p.parse(imgBytes, true, nil, nil)
+	return p.parse(imgBytes, true, nil, nil, nil)
 }
 
 // ParseFast is Parse without producing the annotated marked-up PNG: it
@@ -144,7 +144,7 @@ func (p *Parser) Parse(imgBytes []byte) (markedPNG []byte, result *Result, err e
 // ui.parse (local_ui_intercept.go) keeps using plain Parse: its JSON-RPC
 // result actually returns the annotated image to the caller.
 func (p *Parser) ParseFast(imgBytes []byte) (result *Result, err error) {
-	_, result, err = p.parse(imgBytes, false, nil, nil)
+	_, result, err = p.parse(imgBytes, false, nil, nil, nil)
 	return result, err
 }
 
@@ -166,7 +166,28 @@ func (p *Parser) ParseFast(imgBytes []byte) (result *Result, err error) {
 // icon-dense vs. text-dense a given frame is, unlike the roughly-fixed
 // percentages the other perf changes in this package measured).
 func (p *Parser) ParseFastNearIcons(imgBytes []byte) (result *Result, err error) {
-	_, result, err = p.parse(imgBytes, false, nil, filterBoxesNearIcons)
+	_, result, err = p.parse(imgBytes, false, nil, filterBoxesNearIcons, nil)
+	return result, err
+}
+
+// ParseFastNearIconsStaged is ParseFastNearIcons plus one more checkpoint:
+// onTextBoxes (if non-nil) is invoked with the filtered dbnet box
+// *positions* as soon as they're ready -- before the much slower svtr OCR
+// stage even starts. dbnet is nearly as cheap as icon_detect on CoreML
+// (~1-2s for 12 tiles, see NewParser's doc comment); svtr is what actually
+// costs the 8-11s a text-heavy pass takes (onnx.go's svtrBatchSize doc
+// comment). Before this, "detected but not yet recognized" text boxes were
+// invisible: Result.Text only ever contained entries SVTR had finished
+// recognizing, so green boxes only appeared once EVERYTHING -- detection
+// *and* recognition -- was done, even though detecting their positions
+// (dbnet) is cheap and fast, same as icon_detect.
+//
+// The boxes handed to onTextBoxes carry no text and no ID (recognition and
+// ID assignment both require the final pass) -- callers draw them as bare
+// outlines, then swap in the real TextRegion (with its recognized string
+// and tag) once the full result arrives.
+func (p *Parser) ParseFastNearIconsStaged(imgBytes []byte, onTextBoxes func(boxes []Box)) (result *Result, err error) {
+	_, result, err = p.parse(imgBytes, false, nil, filterBoxesNearIcons, onTextBoxes)
 	return result, err
 }
 
@@ -206,7 +227,7 @@ func (p *Parser) ParseFastNearIcons(imgBytes []byte) (result *Result, err error)
 // separate icon-only kickoff loop (see ParseIconsOnly) rather than relying
 // on ParseStaged calls alone to keep the grid responsive pass-to-pass.
 func (p *Parser) ParseStaged(imgBytes []byte, onIcons func(icons []Icon)) (result *Result, err error) {
-	_, result, err = p.parse(imgBytes, false, onIcons, nil)
+	_, result, err = p.parse(imgBytes, false, onIcons, nil, nil)
 	return result, err
 }
 
@@ -277,7 +298,7 @@ func (p *Parser) runIconStage(original *rgbImage) ([]Icon, error) {
 	return icons, nil
 }
 
-func (p *Parser) parse(imgBytes []byte, drawMarked bool, onIcons func(icons []Icon), textFilter func(icons []Icon, boxes []Box) []Box) (markedPNG []byte, result *Result, err error) {
+func (p *Parser) parse(imgBytes []byte, drawMarked bool, onIcons func(icons []Icon), textFilter func(icons []Icon, boxes []Box) []Box, onTextBoxes func(boxes []Box)) (markedPNG []byte, result *Result, err error) {
 	t0 := time.Now()
 
 	tDecode := time.Now()
@@ -337,6 +358,14 @@ func (p *Parser) parse(imgBytes []byte, drawMarked bool, onIcons func(icons []Ic
 		before := len(textBoxes)
 		textBoxes = textFilter(res.Icons, textBoxes)
 		debugf("text filter: %d -> %d boxes", before, len(textBoxes))
+	}
+
+	if onTextBoxes != nil {
+		// boxesCopy: same independent-slice rationale as onIcons's iconsCopy
+		// above -- the caller may render this concurrently with
+		// batchRecognizeSVTR/associateLabels still running below.
+		boxesCopy := append([]Box(nil), textBoxes...)
+		onTextBoxes(boxesCopy)
 	}
 
 	tSVTR := time.Now()

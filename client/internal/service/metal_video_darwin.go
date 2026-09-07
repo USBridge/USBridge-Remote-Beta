@@ -80,7 +80,12 @@ func buildAIVisionOverlayImage(result *localui.Result, w, h int) *image.RGBA {
 	}
 	for _, t := range result.Text {
 		localui.DrawDetectionBox(img, t.Bbox, true)
-		localui.DrawDetectionTag(img, t.ID, t.Bbox)
+		if t.ID != "" {
+			// Empty ID means this box was published via maybeKickOCR's
+			// onTextBoxes before svtr recognized it (see
+			// ParseFastNearIconsStaged) -- outline only, no tag yet.
+			localui.DrawDetectionTag(img, t.ID, t.Bbox)
+		}
 	}
 	return img
 }

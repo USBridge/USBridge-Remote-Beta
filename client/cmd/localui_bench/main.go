@@ -28,6 +28,7 @@ func main() {
 	fast := flag.Bool("fast", false, "call ParseFast instead of Parse -- skips drawing+encoding the annotated PNG, matching the ai_vision.go live-overlay hot path (no .localui_marked.png is written)")
 	staged := flag.Bool("staged", false, "call ParseStaged instead of Parse/ParseFast -- prints when the icon-only onIcons callback fires relative to the final (icons+OCR) result, matching the ai_vision.go live-overlay hot path")
 	nearIcons := flag.Bool("near-icons", false, "call ParseFastNearIcons instead of Parse/ParseFast/ParseStaged -- only OCRs text boxes near a detected icon, matching ai_vision.go's OCR loop")
+	textStaged := flag.Bool("text-staged", false, "call ParseFastNearIconsStaged instead -- prints when the onTextBoxes callback fires (dbnet+filter done) relative to the final (OCR'd) result, matching ai_vision.go's OCR loop")
 	flag.Parse()
 
 	if flag.NArg() != 1 {
@@ -64,6 +65,10 @@ func main() {
 	for run := 1; run <= *runs; run++ {
 		t0 = time.Now()
 		switch {
+		case *textStaged:
+			result, err = p.ParseFastNearIconsStaged(imgBytes, func(boxes []localui.Box) {
+				fmt.Printf("  onTextBoxes fired at %v: %d boxes\n", time.Since(t0), len(boxes))
+			})
 		case *nearIcons:
 			result, err = p.ParseFastNearIcons(imgBytes)
 		case *staged:

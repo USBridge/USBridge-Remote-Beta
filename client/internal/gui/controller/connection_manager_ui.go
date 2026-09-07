@@ -131,6 +131,9 @@ func (cm *ConnectionManager) refreshConnectionsList() {
 		cards = append(cards, cm.createConnectionGridCard(conn, i))
 		remoteOSValues = append(remoteOSValues, conn.RemoteOS)
 	}
+	// Grid mode only -- rows (List) has no equivalent tile, so this is only
+	// ever appended to cards. Always last, per the brief.
+	cards = append(cards, cm.newAddConnectionGridCard())
 
 	editIndex := -1
 	var editPanel fyne.CanvasObject
@@ -328,6 +331,20 @@ func (cm *ConnectionManager) createConnectionGridCard(conn SavedConnection, idx 
 			},
 		},
 	)
+}
+
+// newAddConnectionGridCard builds Grid mode's "Add New Device" placeholder
+// tile (view.NewAddConnectionGridCard) -- appended after the real cards by
+// refreshConnectionsList. Its "+" opens the same blank Add Connection dialog
+// the header's own Add button does; QR/paste-link are shortcuts into the
+// same flow via a prefilled dialog once they've got something to fill in
+// with (showPrefilledAddDialog).
+func (cm *ConnectionManager) newAddConnectionGridCard() fyne.CanvasObject {
+	return view.NewAddConnectionGridCard(view.AddConnectionCardActions{
+		OnAdd:       cm.showAddDialog,
+		OnQR:        cm.handleQRScan,
+		OnPasteLink: cm.handlePasteLink,
+	})
 }
 
 // saveGridCardEdit commits a Grid card's inline edit (ConnectionCardActions.

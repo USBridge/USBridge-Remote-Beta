@@ -1659,6 +1659,12 @@ type iconChromeButtonSpec struct {
 	CornerRadius float32
 	OnHover      func(bool)
 	LabelSize    float32
+	// HoverStroke/HoverLabelColor override Stroke/the label's color while
+	// hovered, on top of HoverFill/HoverIcon -- nil (the zero value) on
+	// either means "no change on hover", the only behavior every existing
+	// caller relies on.
+	HoverStroke     color.Color
+	HoverLabelColor color.Color
 }
 
 type iconChromeButton struct {
@@ -1838,6 +1844,7 @@ func (b *iconChromeButton) refreshVisuals() {
 	}
 
 	b.bg.FillColor = b.spec.NormalFill
+	b.border.StrokeColor = b.spec.Stroke
 	b.icon.Resource = b.spec.NormalIcon
 	b.icon.Translucency = 0
 	b.label.Text = b.text
@@ -1864,6 +1871,12 @@ func (b *iconChromeButton) refreshVisuals() {
 		b.bg.FillColor = b.spec.HoverFill
 		if b.spec.HoverIcon != nil {
 			b.icon.Resource = b.spec.HoverIcon
+		}
+		if b.spec.HoverStroke != nil {
+			b.border.StrokeColor = b.spec.HoverStroke
+		}
+		if b.spec.HoverLabelColor != nil {
+			b.label.Color = b.spec.HoverLabelColor
 		}
 	}
 

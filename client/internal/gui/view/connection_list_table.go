@@ -16,14 +16,19 @@ package view
 // switches the whole List view into a split layout (NewConnectionsListSplit):
 // the table -- NETWORK, ROUTE BRIDGE and ACTIONS columns dropped, see
 // buildConnectionsListTable's compact mode -- docked left, the edit panel
-// (view.NewConnectionEditPanel, built by the controller) docked right.
-// Unlike a plain HSplit, the panel doesn't stretch to the table's height --
-// connectionsListSplitLayout pins it at a fixed height, positioned next to
-// whichever row is being edited (so a long, scrolled table still opens the
-// panel near that row instead of at the top). That row also gets a
-// rounded teal outline (newConnectionListRow's highlighted flag) so it's
-// obvious which one the panel belongs to. "X" or Save/Delete on the panel
-// exits back to the normal full table.
+// (view.NewConnectionEditPanel, built by the controller) pinned flush right
+// at its own fixed width. Unlike a plain HSplit (which was tried and
+// stretched the panel across however much of the window it was given,
+// leaving it either huge or -- once capped -- floating with dead space
+// past it), connectionsListSplitLayout never stretches the panel at all:
+// the table is the one that grows/shrinks with the window, absorbing
+// whatever width the fixed-size panel doesn't need. The panel's height is
+// likewise fixed and positioned next to whichever row is being edited (so
+// a long, scrolled table still opens the panel near that row instead of
+// at the top). That row also gets a rounded teal outline
+// (newConnectionListRow's highlighted flag) so it's obvious which one the
+// panel belongs to. "X" or Save/Delete on the panel exits back to the
+// normal full table.
 
 import (
 	"image/color"
@@ -422,16 +427,32 @@ func (l *connectionsTableRowLayout) Layout(objects []fyne.CanvasObject, size fyn
 	}
 }
 
+// connectionListSplitPanelMinWidth is a floor under the edit panel's own
+// reported MinSize().Width in connectionsListSplitLayout -- its content
+// (connection_edit_panel.go) is all fixed-size internally, so that width
+// is already stable, but this keeps it from ever reading as cramped if
+// that content ever changes to something narrower.
+const connectionListSplitPanelMinWidth float32 = 320
+
 // connectionsListSplitLayout is List's split-edit layout (see
-// NewConnectionsListSplit): the compact table docked left at half the
-// available width and its own natural (unstretched) height; the edit panel
-// pinned at editRowY -- the Y within the table the row being edited starts
-// at -- vertically centered on that row using its own fixed, natural
-// height (never stretched to match however tall the table happens to be).
+// NewConnectionsListSplit): the panel gets its own natural width (never
+// stretched -- see connection_edit_panel.go's own doc comment) pinned
+// flush to the right edge, at editRowY -- the Y within the table the row
+// being edited starts at -- vertically centered on that row using its own
+// fixed, natural height. The table gets everything else: it's the one
+// that stretches, filling the remaining width at its own natural height.
 type connectionsListSplitLayout struct {
 	editRowY      float32
 	editRowHeight float32
 	gap           float32
+}
+
+func (l *connectionsListSplitLayout) panelWidth(panel fyne.CanvasObject) float32 {
+	w := panel.MinSize().Width
+	if w < connectionListSplitPanelMinWidth {
+		w = connectionListSplitPanelMinWidth
+	}
+	return w
 }
 
 func (l *connectionsListSplitLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
@@ -440,6 +461,7 @@ func (l *connectionsListSplitLayout) MinSize(objects []fyne.CanvasObject) fyne.S
 	}
 	table := objects[0].MinSize()
 	panel := objects[1].MinSize()
+	panelW := l.panelWidth(objects[1])
 	height := table.Height
 	// The panel can stick out past the table's own bottom when the edited
 	// row is near the end of a short table -- make sure the container
@@ -447,7 +469,7 @@ func (l *connectionsListSplitLayout) MinSize(objects []fyne.CanvasObject) fyne.S
 	if panelBottom := l.editRowY + l.editRowHeight/2 + panel.Height/2; panelBottom > height {
 		height = panelBottom
 	}
-	return fyne.NewSize(table.Width+l.gap+panel.Width, height)
+	return fyne.NewSize(table.Width+l.gap+panelW, height)
 }
 
 func (l *connectionsListSplitLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
@@ -457,16 +479,16 @@ func (l *connectionsListSplitLayout) Layout(objects []fyne.CanvasObject, size fy
 	table := objects[0]
 	panel := objects[1]
 
-	leftWidth := size.Width / 2
+	panelMin := panel.MinSize()
+	panelW := l.panelWidth(panel)
+
+	leftWidth := size.Width - panelW - l.gap
+	if leftWidth < 0 {
+		leftWidth = 0
+	}
 	tableHeight := table.MinSize().Height
 	table.Move(fyne.NewPos(0, 0))
 	table.Resize(fyne.NewSize(leftWidth, tableHeight))
-
-	panelMin := panel.MinSize()
-	rightWidth := size.Width - leftWidth - l.gap
-	if rightWidth < panelMin.Width {
-		rightWidth = panelMin.Width
-	}
 
 	panelY := l.editRowY + l.editRowHeight/2 - panelMin.Height/2
 	if panelY < 0 {
@@ -481,5 +503,5 @@ func (l *connectionsListSplitLayout) Layout(objects []fyne.CanvasObject, size fy
 	}
 
 	panel.Move(fyne.NewPos(leftWidth+l.gap, panelY))
-	panel.Resize(fyne.NewSize(rightWidth, panelMin.Height))
+	panel.Resize(fyne.NewSize(panelW, panelMin.Height))
 }

@@ -681,24 +681,12 @@ func newConnectionStatEditRow(label string, entry *widget.Entry, textSize float3
 
 	entry.TextStyle.Monospace = true
 
-	actions := newGridCardFieldActions(entry)
-
-	var leftColumn fyne.CanvasObject
-	if stackedActions {
-		// Nudged a couple px left of the label -- an iconChromeButton draws
-		// its icon centered inside its own box, so the visible glyph sits a
-		// little right of the box's true left edge; VBox alone left-aligns
-		// the boxes themselves and reads as slightly off from the label
-		// above them.
-		nudgedActions := container.New(&leftNudgeLayout{Amount: 2}, actions)
-		leftColumn = container.NewVBox(labelText, nudgedActions)
-	} else {
-		leftColumn = container.New(&DeviceRowControlsLayout{Gap: 4}, actions, labelText)
-	}
+	actions := container.NewCenter(newGridCardFieldActions(entry))
 
 	// Use a fixed width for the input and push it to the right so it looks aligned
-	wrapped := container.New(&rightAlignedInputLayout{Width: 122}, wrapGridCardEntry(entry, textSize, textColor))
-	return container.NewBorder(nil, nil, NewInset(leftColumn, 0, 8, 0, 0), nil, wrapped)
+	wrapped := container.New(&rightAlignedInputLayout{Width: 160}, wrapGridCardEntry(entry, textSize, textColor))
+	
+	return container.NewBorder(nil, nil, NewInset(labelText, 0, 8, 0, 0), actions, wrapped)
 }
 
 func newConnectionStatRow(label, value string, valueColor color.Color) fyne.CanvasObject {

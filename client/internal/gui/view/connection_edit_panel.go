@@ -117,16 +117,16 @@ func NewConnectionEditPanel(data ConnectionEditPanelData, actions ConnectionEdit
 	actionsBox := container.New(&DeviceRowControlsLayout{Gap: 8}, deleteBtn, saveBtn, cancelBtn)
 	bottomRow := container.NewBorder(nil, nil, nil, actionsBox)
 
-	// A little breathing room between name/info-box/buttons -- the 20px
-	// left pad here previously (a NewInset param-order mix-up: (content,
-	// left, right, top, bottom), so that was shifting the whole row
-	// sideways, not adding a top gap) is now a proper top gap on both
-	// statsBox and bottomRow instead.
+	// A little breathing room between name/info-box/buttons -- 3px above
+	// the info box, 3px above the buttons, and the card's own bottom
+	// margin brought down to that same 3px (was 14, matching the other
+	// three sides) so the gap below the buttons doesn't read as bigger
+	// than the gap above them.
 	content := NewInset(container.NewVBox(
 		topRow,
-		NewInset(statsBox, 0, 0, 4, 0),
-		NewInset(bottomRow, 0, 0, 4, 0),
-	), 14, 14, 14, 14)
+		NewInset(statsBox, 0, 0, 3, 0),
+		NewInset(bottomRow, 0, 0, 3, 0),
+	), 14, 14, 14, 3)
 
 	bg := canvas.NewRectangle(design.ColorGray900)
 	bg.CornerRadius = design.RadiusLG

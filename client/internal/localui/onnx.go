@@ -53,52 +53,84 @@ type session struct {
 	inputShape ort.Shape
 }
 
+// acceleratorEP picks and appends the best available non-CPU execution
+// provider to opts, if useGPU is requested, and reports which one actually
+// took (for Parser.Backend/backendLabel) -- "" means it's running on plain
+// CPU, either because useGPU was false or every accelerator attempt failed.
+//
+// OpenVINO's GPU plugin is Intel-only: it silently fails to initialize on
+// Apple Silicon, which used to mean the "GPU" checkbox did nothing at all on
+// a Mac -- every model quietly ran CPU EP regardless. CoreML is the actual
+// accelerator path there: it routes eligible ops to the GPU and/or Apple
+// Neural Engine through Core ML. icon_detect and dbnet are plain conv nets
+// (YOLOv8 / a DBNet backbone) -- squarely CoreML's sweet spot; SVTR is a
+// transformer and benefits less per-op, but batching already amortizes its
+// per-call overhead (see batchedSession's doc comment), so it's still worth
+// trying. MLComputeUnits=ALL lets Core ML place each op on whichever of
+// ANE/GPU/CPU it estimates fastest, rather than pinning everything to one.
+func acceleratorEP(opts *ort.SessionOptions, useGPU bool) string {
+	if !useGPU {
+		return ""
+	}
+	if runtime.GOOS == "darwin" {
+		if err := opts.AppendExecutionProviderCoreMLV2(map[string]string{
+			"MLComputeUnits": "ALL",
+		}); err == nil {
+			return "coreml"
+		}
+		return ""
+	}
+	if err := opts.AppendExecutionProviderOpenVINO(map[string]string{
+		"device_type": "GPU",
+	}); err == nil {
+		return "openvino"
+	}
+	return ""
+}
+
 // newSession loads onnxPath and builds a session for a fixed input/output
-// shape. useGPU requests the OpenVINO execution provider (Intel iGPU/CPU
-// plugin selection is OpenVINO's own, driven by device); on any failure to
-// initialize it (no compatible GPU, provider not present in this
+// shape. useGPU requests an accelerator EP via acceleratorEP; on any failure
+// to initialize one (no compatible GPU/ANE, provider not present in this
 // libonnxruntime.so, etc.) this transparently falls back to plain CPU --
 // matching the device pattern of "degrade to a working default, don't hard
-// fail the whole feature over one optional accelerator".
-func newSession(onnxPath string, inputShape, outputShape []int64, useGPU bool) (*session, error) {
+// fail the whole feature over one optional accelerator". Returns the
+// accelerator name that actually took ("" if none -- see acceleratorEP).
+func newSession(onnxPath string, inputShape, outputShape []int64, useGPU bool) (*session, string, error) {
 	inShape := ort.NewShape(inputShape...)
 	outShape := ort.NewShape(outputShape...)
 
 	inputT, err := ort.NewEmptyTensor[float32](inShape)
 	if err != nil {
-		return nil, fmt.Errorf("alloc input tensor: %w", err)
+		return nil, "", fmt.Errorf("alloc input tensor: %w", err)
 	}
 	outputT, err := ort.NewEmptyTensor[float32](outShape)
 	if err != nil {
 		inputT.Destroy()
-		return nil, fmt.Errorf("alloc output tensor: %w", err)
+		return nil, "", fmt.Errorf("alloc output tensor: %w", err)
 	}
 
 	opts, err := ort.NewSessionOptions()
 	if err != nil {
 		inputT.Destroy()
 		outputT.Destroy()
-		return nil, fmt.Errorf("session options: %w", err)
+		return nil, "", fmt.Errorf("session options: %w", err)
 	}
 	defer opts.Destroy()
+	// ORT's default level already enables most graph optimizations, but
+	// pin it explicitly to the max (op fusion, constant folding, etc.) --
+	// free wins that cost nothing at runtime, only at load time.
+	_ = opts.SetGraphOptimizationLevel(ort.GraphOptimizationLevelEnableAll)
 
-	if useGPU {
-		if err := opts.AppendExecutionProviderOpenVINO(map[string]string{
-			"device_type": "GPU",
-		}); err != nil {
-			// Fall back to CPU silently -- see doc comment above.
-			useGPU = false
-		}
-	}
+	accel := acceleratorEP(opts, useGPU)
 
 	s, err := loadNamedSession(onnxPath, inputT, outputT, opts)
 	if err != nil {
 		inputT.Destroy()
 		outputT.Destroy()
-		return nil, err
+		return nil, "", err
 	}
 
-	return &session{s: s, inputT: inputT, outputT: outputT, inputShape: inShape}, nil
+	return &session{s: s, inputT: inputT, outputT: outputT, inputShape: inShape}, accel, nil
 }
 
 // loadNamedSession introspects onnxPath for its single input/output tensor
@@ -147,14 +179,10 @@ func (s *session) Close() {
 // Runtime. Built for SVTR: a real ui.parse call recognizes anywhere from a
 // handful to a couple hundred text crops, and running them one at a time
 // (a plain `session`, batch=1 always) spends most of its wall time on
-// per-Run() overhead rather than actual compute -- benchmarked live
-// (see internal/localui's package doc comment) at ~20ms/crop for 145
-// crops serially (2.9s of a 4.1s total Parse call) vs. the same graph's
-// isolated 7.2ms/crop at batch=1. Batching amortizes that overhead: at
-// batch=16 on the OpenVINO GPU EP, throughput stabilizes at ~6.15ms/crop
-// (vs. plain CPU actually getting WORSE per-crop above batch=8 for this
-// model -- 14.6ms/crop at batch=16, 23.7ms/crop at batch=32, so GPU is
-// used here even though single-crop SVTR was faster on CPU).
+// per-Run() overhead rather than actual compute. Batching amortizes that.
+// SVTR always stays on plain CPU EP on darwin (see NewParser's doc comment
+// -- CoreML measured a ~5x per-crop regression for it), so svtrBatchSize is
+// tuned for CPU, not an accelerator.
 type batchedSession struct {
 	s          *ort.DynamicAdvancedSession
 	inputName  string
@@ -162,39 +190,38 @@ type batchedSession struct {
 }
 
 // svtrBatchSize is the batch size batchRecognizeSVTR groups crops into.
-// Chosen from the benchmarked GPU numbers above: 16 is close to the
-// per-crop-time knee (6.15ms/crop at 16 vs. 6.73ms/crop at 32, and higher
-// batches mean more wasted compute padding out a call when the crop count
-// doesn't divide evenly).
-const svtrBatchSize = 16
+// Re-benchmarked (USBRIDGE_LOCALUI_DEBUG=1, cmd/localui_bench -fast, M1 Air,
+// 2880x1800 frame, 272 crops, CPU EP) after the icon_detect/dbnet CoreML
+// change freed up CPU headroom that SVTR's threads now get to use: 16 ->
+// ~26-36ms/crop, 32 -> ~19.5-25ms/crop, 64 -> ~18.5-20ms/crop (plateau, and
+// more wasted padding compute on frames with fewer crops that don't divide
+// evenly). 32 is the sweet spot -- most of 64's gain at half the padding
+// waste on a typical (non-worst-case) frame.
+const svtrBatchSize = 32
 
-func newBatchedSession(onnxPath string, useGPU bool) (*batchedSession, error) {
+func newBatchedSession(onnxPath string, useGPU bool) (*batchedSession, string, error) {
 	inputName, outputName, err := ort.GetInputOutputInfo(onnxPath)
 	if err != nil {
-		return nil, fmt.Errorf("inspect model %s: %w", onnxPath, err)
+		return nil, "", fmt.Errorf("inspect model %s: %w", onnxPath, err)
 	}
 	if len(inputName) != 1 || len(outputName) != 1 {
-		return nil, fmt.Errorf("model %s: expected exactly 1 input and 1 output, got %d/%d", onnxPath, len(inputName), len(outputName))
+		return nil, "", fmt.Errorf("model %s: expected exactly 1 input and 1 output, got %d/%d", onnxPath, len(inputName), len(outputName))
 	}
 
 	opts, err := ort.NewSessionOptions()
 	if err != nil {
-		return nil, fmt.Errorf("session options: %w", err)
+		return nil, "", fmt.Errorf("session options: %w", err)
 	}
 	defer opts.Destroy()
-	if useGPU {
-		if err := opts.AppendExecutionProviderOpenVINO(map[string]string{"device_type": "GPU"}); err != nil {
-			// Fall back to CPU silently, same as newSession.
-			useGPU = false
-		}
-	}
+	_ = opts.SetGraphOptimizationLevel(ort.GraphOptimizationLevelEnableAll)
+	accel := acceleratorEP(opts, useGPU)
 
 	s, err := ort.NewDynamicAdvancedSession(onnxPath,
 		[]string{inputName[0].Name}, []string{outputName[0].Name}, opts)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return &batchedSession{s: s, inputName: inputName[0].Name, outputName: outputName[0].Name}, nil
+	return &batchedSession{s: s, inputName: inputName[0].Name, outputName: outputName[0].Name}, accel, nil
 }
 
 // run executes one batch: data must hold exactly batch*3*height*width

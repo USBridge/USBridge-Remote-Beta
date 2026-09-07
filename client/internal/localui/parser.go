@@ -3,6 +3,7 @@ package localui
 import (
 	"fmt"
 	"os"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -33,7 +34,8 @@ type Parser struct {
 	dbnet *session
 	svtr  *batchedSession
 	dict  []string
-	gpu   bool // whether icon/dbnet actually ended up on the OpenVINO GPU EP
+	gpu   bool   // whether the models actually ended up on a non-CPU EP (see acceleratorEP)
+	accel string // "coreml", "openvino", or "" -- see acceleratorEP
 }
 
 // Config describes where to find the ONNX models and the ONNX Runtime
@@ -46,36 +48,57 @@ type Config struct {
 	UseGPU        bool   // try OpenVINO GPU EP for icon_detect+dbnet (SVTR stays CPU -- see NewParser)
 }
 
-// NewParser loads all three ONNX models. All three now try the OpenVINO
-// GPU EP when Config.UseGPU is set: SVTR used to be pinned to CPU (a
-// single crop's GPU dispatch overhead measured slower than CPU), but
-// batching crops together (see batchRecognizeSVTR/batchedSession) changes
-// that -- at batch>=16 the GPU EP's per-crop time keeps dropping while
-// plain CPU's gets WORSE past batch=8 for this model, so batched SVTR is
-// GPU-worthwhile after all. See batchedSession's doc comment for the
-// benchmarked numbers behind this.
+// NewParser loads all three ONNX models. icon_detect and dbnet try an
+// accelerator EP when Config.UseGPU is set (acceleratorEP -- CoreML on
+// macOS, OpenVINO GPU elsewhere): both are plain conv nets and benchmarked
+// (USBRIDGE_LOCALUI_DEBUG=1, cmd/localui_bench, M1 Air) at a large win on
+// CoreML -- icon_detect infer+decode ~800-1090ms -> ~90-340ms, dbnet's 12
+// tiles ~4.0s -> ~1.6-2.3s total.
+//
+// SVTR is deliberately NOT given useGPU on darwin: the same benchmark run
+// showed batched CoreML SVTR at ~150-165ms/crop vs. batched CPU's
+// ~30-35ms/crop -- a ~5x REGRESSION, not a win (CoreML's per-batch dispatch
+// overhead for this model's varying batch shapes swamps whatever the ANE/GPU
+// saves on the compute itself). Non-darwin keeps the OpenVINO GPU attempt
+// for SVTR too -- that path's batch=16 win was benchmarked for real
+// (batchedSession's doc comment) and this hasn't been re-tested against
+// CoreML's regression, so there's no evidence to change it there.
 func NewParser(cfg Config) (*Parser, error) {
 	if err := initRuntime(cfg.SharedLibPath); err != nil {
 		return nil, fmt.Errorf("init onnxruntime: %w", err)
 	}
 
-	icon, err := newSession(cfg.IconONNXPath, []int64{1, 3, iconInputSize, iconInputSize}, []int64{1, 5, 8400}, cfg.UseGPU)
+	icon, iconAccel, err := newSession(cfg.IconONNXPath, []int64{1, 3, iconInputSize, iconInputSize}, []int64{1, 5, 8400}, cfg.UseGPU)
 	if err != nil {
 		return nil, fmt.Errorf("load icon_detect: %w", err)
 	}
-	dbnet, err := newSession(cfg.DBNetONNXPath, []int64{1, 3, dbnetMapSize, dbnetMapSize}, []int64{1, 1, dbnetMapSize, dbnetMapSize}, cfg.UseGPU)
+	dbnet, dbnetAccel, err := newSession(cfg.DBNetONNXPath, []int64{1, 3, dbnetMapSize, dbnetMapSize}, []int64{1, 1, dbnetMapSize, dbnetMapSize}, cfg.UseGPU)
 	if err != nil {
 		icon.Close()
 		return nil, fmt.Errorf("load paddle_dbnet: %w", err)
 	}
-	svtr, err := newBatchedSession(cfg.SVTRONNXPath, cfg.UseGPU)
+	svtrUseGPU := cfg.UseGPU && runtime.GOOS != "darwin"
+	svtr, svtrAccel, err := newBatchedSession(cfg.SVTRONNXPath, svtrUseGPU)
 	if err != nil {
 		icon.Close()
 		dbnet.Close()
 		return nil, fmt.Errorf("load paddle_svtr: %w", err)
 	}
 
-	return &Parser{icon: icon, dbnet: dbnet, svtr: svtr, dict: loadSVTRDict(), gpu: cfg.UseGPU}, nil
+	// accel reflects whichever accelerator icon_detect landed on -- the
+	// three models are always requested together (Config.UseGPU is one
+	// knob), and in practice all three succeed or all three fall back
+	// together, so it's representative for the Backend label without
+	// needing a three-way string.
+	accel := iconAccel
+	if accel == "" {
+		accel = dbnetAccel
+	}
+	if accel == "" {
+		accel = svtrAccel
+	}
+
+	return &Parser{icon: icon, dbnet: dbnet, svtr: svtr, dict: loadSVTRDict(), gpu: accel != "", accel: accel}, nil
 }
 
 func (p *Parser) Close() {
@@ -91,6 +114,58 @@ func (p *Parser) Close() {
 // plus the structured result, in the same shape as the device's own
 // ui.parse response (see types.go).
 func (p *Parser) Parse(imgBytes []byte) (markedPNG []byte, result *Result, err error) {
+	return p.parse(imgBytes, true, nil)
+}
+
+// ParseFast is Parse without producing the annotated marked-up PNG: it
+// returns the same structured Result, just with markedPNG always nil.
+// drawResult (draw boxes + tags into a copy, then PNG-encode it) measured
+// ~1.2-1.3s of a ~13s Parse call on a 2880x1800 frame -- real cost, but
+// pure waste for a caller that only wants Result and never looks at the
+// image, which is exactly ai_vision.go's live-overlay detection pass (it
+// burns its own overlay directly into the live video frame via
+// drawCachedOverlay, using the same localui.DrawDetectionBox/Tag helpers
+// drawResult calls -- the annotated PNG Parse would have built is discarded
+// there today, see maybeKickDetection). MCP's ui.parse (local_ui_intercept.go)
+// keeps using plain Parse: its JSON-RPC result actually returns the
+// annotated image to the caller.
+func (p *Parser) ParseFast(imgBytes []byte) (result *Result, err error) {
+	_, result, err = p.parse(imgBytes, false, nil)
+	return result, err
+}
+
+// ParseStaged is ParseFast plus one extra checkpoint: onIcons (if non-nil)
+// is invoked with the icon_detect results as soon as they're ready --
+// before the much slower dbnet+svtr text/OCR stage even starts. With
+// CoreML, icon_detect (prep+infer+decode) typically finishes in a few
+// hundred ms; OCR on a text-heavy frame is still several seconds (see
+// onnx.go's svtrBatchSize doc comment) -- so a caller that only cares
+// about "where are the clickable things" no longer has to wait for OCR to
+// find out.
+//
+// Icon IDs are stable between the two callbacks: assignMarkIDs always
+// numbers icons before text (marks.go), so onIcons's icons and the icons
+// in the final Result carry the same "00".."FF" tags -- nothing gets
+// renumbered once OCR finishes. icons[i].Label is empty at the onIcons
+// callback (labels come from nearby OCR'd text via associateLabels, which
+// needs text and only runs once OCR is done) and gets filled in on the
+// final Result as usual.
+//
+// Built for ai_vision.go's live overlay (maybeKickDetection): before this,
+// the icon/grid overlay and the text overlay updated together once per
+// Parse call, so a slow OCR pass on a text-heavy frame held up icon boxes
+// that were ready seconds earlier -- exactly the "OCR blocks grid
+// detection" behavior this exists to fix. It does NOT change how often a
+// new detection pass can be *started*: Parser serializes all calls behind
+// one mutex, so the next pass still waits for this one's OCR stage to
+// finish and release it (see the mutex below) -- only publishing within a
+// single pass got faster, not the pass-to-pass cadence.
+func (p *Parser) ParseStaged(imgBytes []byte, onIcons func(icons []Icon)) (result *Result, err error) {
+	_, result, err = p.parse(imgBytes, false, onIcons)
+	return result, err
+}
+
+func (p *Parser) parse(imgBytes []byte, drawMarked bool, onIcons func(icons []Icon)) (markedPNG []byte, result *Result, err error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	t0 := time.Now()
@@ -105,7 +180,7 @@ func (p *Parser) Parse(imgBytes []byte) (markedPNG []byte, result *Result, err e
 	}
 	debugf("decode PNG (%dx%d, %d bytes): %v", original.W, original.H, len(imgBytes), time.Since(tDecode))
 
-	res := &Result{ImageWidth: original.W, ImageHeight: original.H, Backend: backendLabel(p.gpu)}
+	res := &Result{ImageWidth: original.W, ImageHeight: original.H, Backend: backendLabel(p.accel)}
 
 	// -- Icons --
 	tIcon := time.Now()
@@ -124,6 +199,18 @@ func (p *Parser) Parse(imgBytes []byte) (markedPNG []byte, result *Result, err e
 		res.Icons = append(res.Icons, icon)
 	}
 	debugf("icon_detect: prep(CLAHE+letterbox)=%v infer+decode=%v -> %d icons", tIconPrep, time.Since(tIconInfer), len(res.Icons))
+
+	if onIcons != nil {
+		// iconsCopy: onIcons's caller (ai_vision.go) hands this straight to
+		// a live overlay that can render concurrently with the rest of this
+		// call still mutating res.Icons' backing array via associateLabels
+		// below -- give it an independent slice+backing array so there's no
+		// data race between "OCR fills in Label" here and "overlay reads
+		// Label" there.
+		iconsCopy := append([]Icon(nil), res.Icons...)
+		assignMarkIDs(iconsCopy, nil) // stable: icons are always numbered before text, see assignMarkIDs
+		onIcons(iconsCopy)
+	}
 
 	// -- Text (tiled DBNet, see tile.go) --
 	tiles := tileRects(original.W, original.H, dbnetMapSize, dbnetTileOverlap)
@@ -158,19 +245,21 @@ func (p *Parser) Parse(imgBytes []byte) (markedPNG []byte, result *Result, err e
 	res.ZoomHints = findZoomHints(res.Icons)
 	debugf("associate+mark: %v", time.Since(tAssoc))
 
-	tDraw := time.Now()
-	markedPNG = drawResult(original, res)
-	debugf("draw+encode marked PNG (%d bytes): %v", len(markedPNG), time.Since(tDraw))
+	if drawMarked {
+		tDraw := time.Now()
+		markedPNG = drawResult(original, res)
+		debugf("draw+encode marked PNG (%d bytes): %v", len(markedPNG), time.Since(tDraw))
+	}
 
 	debugf("TOTAL: %v", time.Since(t0))
 	return markedPNG, res, nil
 }
 
-func backendLabel(gpu bool) string {
-	if gpu {
-		return "local-onnx-openvino-gpu"
+func backendLabel(accel string) string {
+	if accel == "" {
+		return "local-onnx-cpu"
 	}
-	return "local-onnx-cpu"
+	return "local-onnx-" + accel
 }
 
 func (p *Parser) detectTextInTile(original *rgbImage, t rect) ([]Box, error) {

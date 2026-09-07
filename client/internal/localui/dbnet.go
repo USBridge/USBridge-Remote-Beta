@@ -1,11 +1,37 @@
 package localui
 
+import "os"
+
 const (
 	dbnetMapSize     = 960
 	dbnetThresh      = 0.2
 	dbnetMinSide     = 2
 	dbnetUnclipRatio = 1.5
 	dbnetTileOverlap = 150
+
+	// dbnetMinAvgScore additionally gates each connected blob by its own
+	// average probability (mean of raw[] over the pixels that actually
+	// fired dbnetThresh, not the whole bounding box -- background gaps
+	// inside an irregular blob's axis-aligned rect would otherwise dilute
+	// real text's score). dbnetThresh alone only asks "did this pixel
+	// clear a low bar", so a handful of barely-over-0.2 pixels from photo/
+	// icon texture or antialiasing noise turns into a full box that then
+	// gets OCR'd for nothing -- SVTR dominates Parse's wall time (see
+	// onnx.go's svtrBatchSize doc comment), so every box that shouldn't
+	// exist is wasted compute on the critical path, not just a wrong
+	// answer. Value picked from a real score dump
+	// (USBRIDGE_LOCALUI_DUMP_SCORES=1, see decodeDBNet) against a dense
+	// code-editor screenshot: 803 blobs, mean score 0.87, strongly skewed
+	// high (385 blobs scored >=0.95) with only a small low-confidence tail
+	// (~3% scored <0.4). 0.45 cuts ~5-8% of blobs per tile -- real but
+	// modest: most of what looked like "garbage OCR" in practice turned
+	// out to be SVTR misreading small/oblique real text with low
+	// recognition confidence, not DBNet hallucinating boxes outright (see
+	// ai_vision.go/onnx.go for where Parse's wall time actually goes).
+	// Deliberately conservative: the tail this drops is unambiguously
+	// weak, so there's no accuracy risk, but don't expect this alone to
+	// meaningfully cut Parse's wall time.
+	dbnetMinAvgScore = 0.45
 )
 
 // decodeDBNet mirrors usbridge/modules/ui_parser/dbnet.go's decodeDBNet:
@@ -32,12 +58,22 @@ func decodeDBNet(raw []float32) []Box {
 	boxes := connectedComponentBoxes(dilated, size, size)
 
 	var out []Box
+	var kept, dropped int
 	for _, b := range boxes {
 		bw := float64(b.X2 - b.X1)
 		bh := float64(b.Y2 - b.Y1)
 		if bw < dbnetMinSide || bh < dbnetMinSide {
 			continue
 		}
+		score := blobAvgScore(raw, mask, size, b)
+		if os.Getenv("USBRIDGE_LOCALUI_DUMP_SCORES") != "" {
+			debugf("blob score=%.3f box=%v", score, b)
+		}
+		if score < dbnetMinAvgScore {
+			dropped++
+			continue
+		}
+		kept++
 		area := bw * bh
 		perimeter := 2 * (bw + bh)
 		if perimeter == 0 {
@@ -63,7 +99,37 @@ func decodeDBNet(raw []float32) []Box {
 		}
 		out = append(out, Box{X1: x1, Y1: y1, X2: x2, Y2: y2})
 	}
+	if dropped > 0 {
+		debugf("dbnet tile: dropped %d/%d blobs below dbnetMinAvgScore=%.2f", dropped, kept+dropped, dbnetMinAvgScore)
+	}
 	return out
+}
+
+// blobAvgScore averages raw[] over the pixels inside b that were true in
+// the *pre-dilation* mask -- dilateRect pads a component's box with
+// low/no-confidence neighbors purely to bridge word-gaps between letters,
+// and b's own background gaps (spaces between letters, the box being an
+// axis-aligned rect around an irregular blob) never fired at all. Averaging
+// over the whole box would dilute real text's score down towards noise's;
+// restricting to the pixels that actually cleared dbnetThresh measures
+// what the model was actually confident about.
+func blobAvgScore(raw []float32, mask []bool, size int, b intBox) float64 {
+	var sum float64
+	var n int
+	for y := b.Y1; y < b.Y2; y++ {
+		row := y * size
+		for x := b.X1; x < b.X2; x++ {
+			i := row + x
+			if mask[i] {
+				sum += float64(raw[i])
+				n++
+			}
+		}
+	}
+	if n == 0 {
+		return 0
+	}
+	return sum / float64(n)
 }
 
 // dilateRect performs binary dilation with a kw x kh rectangular

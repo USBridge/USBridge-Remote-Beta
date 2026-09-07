@@ -138,7 +138,19 @@ func (t *BrandTheme) Color(name fyne.ThemeColorName, _ fyne.ThemeVariant) color.
 	case fynetheme.ColorNameMenuBackground:
 		return ColorGray950
 	case fynetheme.ColorNameOverlayBackground:
-		return ColorGray950
+		// Transparent, not ColorGray950 (fully opaque) -- widget.PopUp's own
+		// renderer (fyne's popup.go) always paints this color across the
+		// *entire* canvas as its background layer, underneath whatever
+		// content the popup was given. Every dialog in this app
+		// (view.NewOverlayPopup/ShowOverlayPopup) draws its own translucent
+		// "dim" rectangle plus an opaque panel background as part of that
+		// content -- so with this opaque, the real backdrop was always
+		// Fyne's own 100%-opaque layer sitting behind it, making the
+		// carefully-tuned translucent dim rect (e.g. DimColor's A:0x72)
+		// pointless: the window behind a dialog read as flat black instead
+		// of dimmed-but-visible. Transparent here hands full control of the
+		// backdrop to each dialog's own dim rectangle, which is the point.
+		return color.Transparent
 	case fynetheme.ColorNamePlaceHolder:
 		return ColorTextMuted
 	case fynetheme.ColorNamePressed:

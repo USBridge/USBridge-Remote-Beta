@@ -1690,6 +1690,9 @@ func (b *iconChromeButton) CreateRenderer() fyne.WidgetRenderer {
 
 	b.border = canvas.NewRectangle(color.Transparent)
 	b.border.CornerRadius = design.RadiusMD
+	if b.spec.CornerRadius > 0 {
+		b.border.CornerRadius = b.spec.CornerRadius
+	}
 	b.border.StrokeColor = b.spec.Stroke
 	b.border.StrokeWidth = b.spec.StrokeWidth
 

@@ -470,12 +470,12 @@ cp "$BUILD_CACHE_APP_EXE" "$DIST_WIN_BIN/$APP_EXE_NAME"
 # an optional accelerator, never a hard dependency of the build.
 echo -e "${YELLOW}Bundling local ui.parse (ONNX Runtime + models) for AI Vision...${NC}"
 ORT_CACHE_DIR="$REPO_ROOT/.build-cache/onnxruntime-windows"
-# Also re-fetch if DirectML.dll is missing -- guards a stale local cache dir
-# from before fetch_onnxruntime.sh started bundling it (CPU-only
-# onnxruntime.dll present, DirectML.dll never fetched, so the plain
-# onnxruntime.dll-only check below would otherwise skip re-fetching forever
-# on a dev machine that built this before that change).
-if [ ! -f "$ORT_CACHE_DIR/onnxruntime.dll" ] || [ ! -f "$ORT_CACHE_DIR/DirectML.dll" ]; then
+# Also re-fetch if DirectML.dll or the VC++ redistributable DLLs are
+# missing -- guards a stale local cache dir from before fetch_onnxruntime.sh
+# started bundling them (CPU-only onnxruntime.dll present, the rest never
+# fetched, so a plain onnxruntime.dll-only check below would otherwise skip
+# re-fetching forever on a dev machine that built this before those changes).
+if [ ! -f "$ORT_CACHE_DIR/onnxruntime.dll" ] || [ ! -f "$ORT_CACHE_DIR/DirectML.dll" ] || [ ! -f "$ORT_CACHE_DIR/vcruntime140.dll" ]; then
     "$SCRIPTS_DIR/fetch_onnxruntime.sh" "$ORT_CACHE_DIR" windows || true
 fi
 if [ -f "$ORT_CACHE_DIR/onnxruntime.dll" ]; then
@@ -497,6 +497,20 @@ if [ -f "$ORT_CACHE_DIR/DirectML.dll" ]; then
 else
     echo -e "${YELLOW}⚠${NC} Could not fetch DirectML.dll -- local ui.parse/AI Vision will run CPU-only (no GPU accel) in this build"
 fi
+# VC++ redistributable DLLs onnxruntime-directml's onnxruntime.dll needs at
+# load time (see fetch_onnxruntime.sh's header comment) -- not guaranteed
+# present on a clean Windows machine that's never installed Microsoft's
+# vc_redist.exe. Non-fatal like the two above: missing these just means
+# onnxruntime.dll fails to LoadLibrary at runtime and local ui.parse/AI
+# Vision stays unavailable, same degrade-not-fail pattern.
+for _dll in msvcp140.dll msvcp140_1.dll vcruntime140.dll vcruntime140_1.dll; do
+    if [ -f "$ORT_CACHE_DIR/$_dll" ]; then
+        cp -L "$ORT_CACHE_DIR/$_dll" "$DIST_WIN_BIN/$_dll"
+        echo -e "${GREEN}✓${NC} bin/$_dll"
+    else
+        echo -e "${YELLOW}⚠${NC} Could not fetch $_dll -- onnxruntime.dll may fail to load on a machine without the VC++ redistributable"
+    fi
+done
 LOCALUI_MODELS_SRC="$REPO_ROOT/internal/localui/models"
 if [ -f "$LOCALUI_MODELS_SRC/icon_detect.onnx" ]; then
     mkdir -p "$DIST_WIN_BIN/localui/models"

@@ -508,19 +508,28 @@ func goVTLog(msg *C.char) {
 
 // goAIVisionOverlay is the cgo entry point for the AI Vision live overlay
 // (see ai_vision.go): called from deliver_frame in moonlight_cgo_linux.go
-// (before the frame reaches vk_video_try_submit/gl_video_try_submit) and
-// from the CPU-fallback decode path in moonlight_cgo_apple.go, on the
-// exact RGBA buffer that's about to be displayed. wrapRGBA below is a
-// zero-copy view over the C-owned memory -- ApplyAIVisionOverlay draws
-// into it in place -- valid only for the duration of this call, which
-// matches how long the C side guarantees the buffer stays alive.
+// and win_deliver_frame in moonlight_cgo_windows.go (both before the frame
+// reaches vk_video_try_submit/gl_video_try_submit) and from the CPU-fallback
+// decode path in moonlight_cgo_apple.go, on the exact RGBA buffer that's
+// about to be displayed. wrapRGBA below is a zero-copy view over the
+// C-owned memory -- ApplyAIVisionOverlay draws into it in place -- valid
+// only for the duration of this call, which matches how long the C side
+// guarantees the buffer stays alive.
+//
+// Windows' Vulkan path is NOT a genuine zero-copy GPU-texture handoff like
+// Android/iOS's AHardwareBuffer path below: win_deliver_frame already runs
+// every decoded frame through sws_scale into a CPU-side RGBA buffer before
+// vk_video_try_submit even sees it (that's also what feeds goVTFrame's
+// VideoTrace stats), so there's a real CPU-readable buffer to overlay into
+// on every frame, same as Linux -- just gated to the RGBA (not GDI/BGRA
+// fallback) dst_fmt case, see win_deliver_frame's own comment.
 //
 // Not wired into the CVImageBufferRef fast path metal_video_try_submit
 // takes on macOS when it succeeds (see goAIVisionShouldSample/goAIVisionSample
-// below for that path instead), nor into the AHardwareBuffer path on
-// Android/Windows-Vulkan/iOS: those hand decoded frames to the GPU without
-// ever producing a CPU-readable buffer on every frame, so overlaying them
-// needs an actual native compositing layer (macOS: metal_video_impl_darwin.m's
+// below for that path instead), nor into the true AHardwareBuffer path on
+// Android/iOS: those hand decoded frames to the GPU without ever producing
+// a CPU-readable buffer on every frame, so overlaying them needs an actual
+// native compositing layer (macOS: metal_video_impl_darwin.m's
 // g_overlay_layer; Android's cursor uses the same pattern, see
 // VulkanOverlayBridge.kt) rather than pixel writes here.
 //

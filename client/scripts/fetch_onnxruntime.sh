@@ -22,6 +22,22 @@
 # from the same wheel and ship in lockstep, so there's no version-skew risk
 # fetching them together like this.
 #
+# Unlike the plain CPU "onnxruntime" wheel (mingw/self-contained, no extra
+# runtime deps -- see the "Why the PyPI wheel" paragraph below),
+# onnxruntime-directml's onnxruntime.dll is MSVC-built and dynamically
+# links the Visual C++ redistributable (MSVCP140.dll, MSVCP140_1.dll,
+# VCRUNTIME140.dll, VCRUNTIME140_1.dll) -- present on most real Windows
+# boxes already (bundled with countless other apps/games) but NOT
+# guaranteed, and confirmed absent from this repo's own clean MSYS2/
+# mingw-w64 build environment via build_windows.sh's post-build dependency
+# walk. Rather than requiring every user to separately install Microsoft's
+# vc_redist.exe first, this fetches those 4 DLLs from the "msvc-runtime"
+# PyPI wheel (a redistribution of Microsoft's own VC++ Redistributable
+# package built specifically so Python wheels needing it can bundle it
+# app-locally instead of depending on a system-wide install -- same
+# "self-contained redistributable" reasoning as the onnxruntime wheel
+# itself) and bundles them flat alongside onnxruntime.dll/DirectML.dll.
+#
 # target_os is one of "darwin", "linux", "windows" -- defaults to the build
 # host's own OS (so `./fetch_onnxruntime.sh out` on a Mac fetches the macOS
 # lib) but can be overridden for a cross build, e.g. build_windows.sh cross-
@@ -90,16 +106,40 @@ esac
 
 # Prefer python3, but fall back to plain "python" -- some environments
 # (e.g. MSYS2's mingw-w64-ucrt-x86_64-python package, used by
-# build_windows.sh's CI job) only provide the latter.
+# build_windows.sh's CI job) only provide the latter. Each candidate is
+# verified to actually have a working `pip` before being accepted, not just
+# to exist on PATH: MSYS2's own python3 (the first thing PATH resolves to
+# inside its UCRT64 shell -- the shell build_windows.sh itself runs under
+# on a native Windows dev box) ships with no pip and no MSYS2 package
+# providing one for it either, while a separate real Windows Python install
+# (python.org / Microsoft Store, common on any dev machine, just not on
+# MSYS2's own PATH) usually does -- confirmed exactly this split on a real
+# dev box: MSYS2 UCRT64's python3 -> "No module named pip", while
+# AppData\Local\Programs\Python\Python3xx's python3 (reachable once PATH
+# widens to include Windows' own PATH entries, e.g. this script invoked
+# from plain Git Bash rather than the MSYS2 UCRT64 shell) worked fine. Only
+# the have-a-working-pip candidate is usable, so probe rather than assume.
 PYTHON_BIN=""
 for _cand in python3 python; do
-    if command -v "$_cand" >/dev/null 2>&1; then
+    if command -v "$_cand" >/dev/null 2>&1 && "$_cand" -m pip --version >/dev/null 2>&1; then
         PYTHON_BIN="$_cand"
         break
     fi
 done
+# Last resort: a real Windows Python install under the current user's
+# AppData, even if it's not on this shell's PATH at all (MSYS2 shells don't
+# inherit the Windows user PATH by default). Picks the newest version dir
+# if more than one is installed.
 if [ -z "$PYTHON_BIN" ]; then
-    echo "!! fetch_onnxruntime.sh: no python3/python found on PATH" >&2
+    for _cand in $(ls -d /c/Users/*/AppData/Local/Programs/Python/Python3*/python.exe 2>/dev/null | sort -rV); do
+        if "$_cand" -m pip --version >/dev/null 2>&1; then
+            PYTHON_BIN="$_cand"
+            break
+        fi
+    done
+fi
+if [ -z "$PYTHON_BIN" ]; then
+    echo "!! fetch_onnxruntime.sh: no python3/python with a working pip found (checked PATH and AppData\\Local\\Programs\\Python)" >&2
     exit 1
 fi
 
@@ -171,4 +211,33 @@ if [ "$TARGET_OS" = "windows" ]; then
     cp "$DML_SRC" "$OUT_DIR/DirectML.dll"
     chmod 755 "$OUT_DIR/DirectML.dll"
     echo "    -> $OUT_DIR/DirectML.dll ($(du -h "$OUT_DIR/DirectML.dll" | cut -f1))"
+
+    # VC++ redistributable DLLs onnxruntime.dll needs at load time -- see
+    # the header comment. Downloaded separately since they're not part of
+    # the onnxruntime-directml wheel itself.
+    echo "==> Fetching msvc-runtime (PyPI, VC++ redistributable DLLs onnxruntime.dll needs)..."
+    MSVC_DOWNLOAD_ARGS=(--no-deps --only-binary=:all: -d "$WORK/msvc_wheel")
+    if [ "$TARGET_OS" != "$HOST_OS" ]; then
+        MSVC_DOWNLOAD_ARGS+=(--platform win_amd64 --python-version 311)
+    fi
+    mkdir -p "$WORK/msvc_wheel"
+    "$PYTHON_BIN" -m pip download -q --disable-pip-version-check "${MSVC_DOWNLOAD_ARGS[@]}" msvc-runtime
+    MSVC_WHEEL="$(find "$WORK/msvc_wheel" -maxdepth 1 -name '*.whl' -print -quit)"
+    if [ -z "$MSVC_WHEEL" ]; then
+        echo "!! fetch_onnxruntime.sh: pip download produced no msvc-runtime wheel -- onnxruntime.dll may fail to load on a machine without the VC++ redistributable already installed" >&2
+    else
+        unzip -q "$MSVC_WHEEL" '*.data/data/Scripts/*.dll' -d "$WORK/msvc_pkg"
+        MSVC_SCRIPTS_DIR="$(find "$WORK/msvc_pkg" -type d -name Scripts -print -quit)"
+        for dll in msvcp140.dll msvcp140_1.dll vcruntime140.dll vcruntime140_1.dll; do
+            SRC_DLL="$(find "$MSVC_SCRIPTS_DIR" -maxdepth 1 -iname "$dll" -print -quit)"
+            if [ -z "$SRC_DLL" ]; then
+                echo "!! fetch_onnxruntime.sh: msvc-runtime wheel had no $dll" >&2
+                continue
+            fi
+            DEST_NAME="$(basename "$SRC_DLL")"
+            cp "$SRC_DLL" "$OUT_DIR/$DEST_NAME"
+            chmod 755 "$OUT_DIR/$DEST_NAME"
+        done
+        echo "    -> $OUT_DIR/{msvcp140,msvcp140_1,vcruntime140,vcruntime140_1}.dll"
+    fi
 fi

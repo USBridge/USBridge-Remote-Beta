@@ -34,6 +34,7 @@ extern void goMoonlightTerminated(int errCode);
 extern void goVTLog(char *msg);
 extern void goVTFrame(uint8_t *rgba, int width, int height, int stride);
 extern void goVideoFormatNegotiated(int videoFormat);
+extern void goAIVisionOverlay(uint8_t *rgba, int width, int height, int stride);
 
 // Native overlay fast paths.
 // Vulkan (vk_video_impl_windows.c) — preferred, RGBA format.
@@ -367,6 +368,17 @@ static void win_deliver_frame(AVFrame *frame) {
             sws_scale(g_sws, (const uint8_t *const *)frame->data, frame->linesize,
                       0, h, dst, dst_stride);
             if (++g_av_frame_cnt == 1) goVTLog((char*)"libavcodec/win: first video frame decoded");
+            // AI Vision overlay: no-op unless the checkbox in the video
+            // settings popup is on (checked internally, single atomic load
+            // in the common case) -- burns detection boxes+ids into pixels
+            // in place, before it reaches either native fast path. Mirrors
+            // moonlight_cgo_linux.go's ordering. Only valid when pixels is
+            // actually RGBA (dst_fmt above) -- skip it on the rare GDI/BGRA
+            // fallback path, where ApplyAIVisionOverlay's box colors and
+            // downstream PNG-encode-as-RGBA would both come out wrong
+            // (R/B channels swapped).
+            if (dst_fmt == AV_PIX_FMT_RGBA)
+                goAIVisionOverlay(pixels, w, h, w * 4);
             // Submit to native overlay (Vulkan preferred, GDI fallback); no-op if inactive.
             if (!vk_video_try_submit(pixels, w, h, w * 4))
                 gl_video_try_submit(pixels, w, h, w * 4);
@@ -908,4 +920,26 @@ func goVTFrame(rgba *C.uint8_t, width, height, stride C.int) {
 		}
 	}
 	cb(img)
+}
+
+// goAIVisionOverlay is the Windows counterpart to moonlight_cgo_wrapper.go's
+// export of the same name (that file is built only for darwin/ios/linux --
+// see its own doc comment for why Windows needs a separate definition, and
+// win_deliver_frame's call site in this file for why Windows actually has a
+// genuine CPU-readable RGBA buffer to overlay into on every frame, unlike
+// the true zero-copy GPU-texture paths that comment also describes).
+// Identical body: no-op unless the checkbox is on, draws detection boxes
+// into rgba in place.
+//
+//export goAIVisionOverlay
+func goAIVisionOverlay(rgba *C.uint8_t, width, height, stride C.int) {
+	if rgba == nil || width <= 0 || height <= 0 || stride <= 0 {
+		return
+	}
+	if !aiVisionEnabled.Load() {
+		return
+	}
+	w, h, s := int(width), int(height), int(stride)
+	buf := unsafe.Slice((*byte)(unsafe.Pointer(rgba)), s*h)
+	ApplyAIVisionOverlay(buf, w, h, s)
 }

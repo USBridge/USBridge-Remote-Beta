@@ -40,7 +40,7 @@ type ConnectionListItem struct {
 // whatever room the fixed columns and gaps leave" -- only NAME does; the
 // header row and every data row share this (and connectionsTableRowLayout)
 // so columns line up across rows.
-var connectionListColumnWidths = []float32{32, 0, 64, 168, 84, 116}
+var connectionListColumnWidths = []float32{32, 130, 70, 0, 100, 116}
 
 const connectionListColumnGap float32 = 16
 
@@ -55,11 +55,11 @@ func NewConnectionsListTable(items []ConnectionListItem) fyne.CanvasObject {
 		return NewInset(sep, 0, 0, 2, 2)
 	}
 
-	rowsCol := container.NewVBox(newConnectionListHeaderRow())
+	children := []fyne.CanvasObject{newConnectionListHeaderRow()}
 	for _, item := range items {
-		rowsCol.Add(newDivider())
-		rowsCol.Add(newConnectionListRow(item))
+		children = append(children, newDivider(), newConnectionListRow(item))
 	}
+	rowsCol := container.New(&tightStatsVBoxLayout{Gap: 0}, children...)
 
 	bg := canvas.NewRectangle(design.ColorGray900)
 	bg.CornerRadius = design.RadiusLG
@@ -74,8 +74,16 @@ func newConnectionListHeaderRow() fyne.CanvasObject {
 	cells := make([]fyne.CanvasObject, len(labels))
 	for i, l := range labels {
 		t := canvas.NewText(l, design.ColorConnectionsSectionSubtitle)
-		t.TextSize = 10
+		t.TextSize = 9
 		t.TextStyle.Monospace = true
+
+		switch i {
+		case 0, 2:
+			t.Alignment = fyne.TextAlignCenter
+		case 4, 5:
+			t.Alignment = fyne.TextAlignTrailing
+		}
+
 		cells[i] = t
 	}
 	return container.New(&connectionsTableRowLayout{Widths: connectionListColumnWidths, Gap: connectionListColumnGap}, cells...)
@@ -87,19 +95,19 @@ func newConnectionListRow(item ConnectionListItem) fyne.CanvasObject {
 
 	osCell := container.NewCenter(newConnectionCardStatusIndicator(data.RemoteOS))
 	nameCell := newConnectionListNameCell(data, item.Actions.OnEdit, isAgent, isKVM)
-	stateCell := newConnectionListStateCell(isAgent, isKVM)
+	stateCell := container.NewCenter(newConnectionListStateCell(isAgent, isKVM))
 	networkCell := newConnectionListNetworkCell(data.LANAddress, data.TailscaleAddress)
-	routeCell := newConnectionListRouteCell(data, item.Actions.OnProtocolChange, item.State)
-	actionsCell := newConnectionListActionsCell(item)
+	routeCell := container.NewBorder(nil, nil, nil, newConnectionListRouteCell(data, item.Actions.OnProtocolChange, item.State))
+	actionsCell := container.NewBorder(nil, nil, nil, newConnectionListActionsCell(item))
 
 	row := container.New(&connectionsTableRowLayout{Widths: connectionListColumnWidths, Gap: connectionListColumnGap},
 		osCell, nameCell, stateCell, networkCell, routeCell, actionsCell)
 
-	return NewInset(row, 0, 0, 8, 8)
+	return row
 }
 
 func newConnectionListNameCell(data ConnectionRowData, onEdit func(), isAgent, isKVM bool) fyne.CanvasObject {
-	nameText := NewBrandText(strings.TrimSpace(data.Name), 14, design.ColorTextLight, true)
+	nameText := NewBrandText(strings.TrimSpace(data.Name), 11, design.ColorTextLight, true)
 
 	editIcon := fyne.NewStaticResource("connection-edit-title.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#c5c8b5"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zm2.92 2.33H5v-.92l9.06-9.06.92.92L5.92 19.58zM20.71 7.04a1.003 1.003 0 0 0 0-1.42L18.37 3.29a1.003 1.003 0 0 0-1.42 0l-1.13 1.13 3.75 3.75 1.14-1.13z"/></svg>`))
 	editBtn := newIconChromeButton(iconChromeButtonSpec{
@@ -108,16 +116,20 @@ func newConnectionListNameCell(data ConnectionRowData, onEdit func(), isAgent, i
 		Stroke:     color.Transparent,
 		NormalIcon: editIcon,
 		IconSize:   fyne.NewSize(11, 11),
-		ButtonSize: fyne.NewSize(20, 20),
+		ButtonSize: fyne.NewSize(16, 16),
 		OnTapped:   onEdit,
 	})
 
 	nameRow := container.New(&DeviceRowControlsLayout{Gap: 6}, nameText, editBtn)
 
-	platformText := canvas.NewText(connectionListPlatformLabel(isAgent, isKVM), design.ColorTextMuted)
-	platformText.TextSize = 10
+	accent := color.Color(design.ColorConnectionAddFill)
+	if isAgent {
+		accent = design.ColorConnectionBadgeText
+	}
+	platformLabel := connectionListPlatformLabel(isAgent, isKVM)
+	platformPlaque := newConnectionCardChipsRow(platformLabel, "", accent)
 
-	return container.NewVBox(nameRow, platformText)
+	return container.New(&tightStatsVBoxLayout{Gap: 2}, nameRow, platformPlaque)
 }
 
 // connectionListPlatformLabel is the small muted line under the name --
@@ -137,37 +149,28 @@ func connectionListPlatformLabel(isAgent, isKVM bool) string {
 }
 
 func newConnectionListStateCell(isAgent, isKVM bool) fyne.CanvasObject {
-	label := "Unknown"
-	stateColor := color.Color(design.ColorBorder)
-	switch {
-	case isKVM:
-		label = "KVM"
-		stateColor = design.ColorConnectionAddFill
-	case isAgent:
-		label = "Agent"
-		stateColor = design.ColorConnectionBadgeText
+	accent := color.Color(design.ColorConnectionAddFill)
+	if isAgent {
+		accent = design.ColorConnectionBadgeText
 	}
-	txt := canvas.NewText(label, stateColor)
-	txt.TextSize = 12
-	txt.TextStyle.Monospace = true
-	return txt
+	return newConnectionTypeBadge(isAgent, isKVM, accent)
 }
 
 func newConnectionListNetworkCell(lanAddress, tailscaleAddress string) fyne.CanvasObject {
 	tsValueColor := color.NRGBA{R: 0xeb, G: 0xff, B: 0xbc, A: 0xff}
 	lanRow := newConnectionListNetworkLine("LAN", connectionCardAddressOrNone(lanAddress), design.ColorTextLight)
 	tsRow := newConnectionListNetworkLine("TS", connectionCardAddressOrNone(tailscaleAddress), tsValueColor)
-	return container.NewVBox(lanRow, tsRow)
+	return container.New(&tightStatsVBoxLayout{Gap: 2}, lanRow, tsRow)
 }
 
 func newConnectionListNetworkLine(label, value string, valueColor color.Color) fyne.CanvasObject {
 	c5c8b5Color := color.NRGBA{R: 0xc5, G: 0xc8, B: 0xb5, A: 0xff}
 	labelText := canvas.NewText(label, c5c8b5Color)
-	labelText.TextSize = 10
+	labelText.TextSize = 9
 	labelText.TextStyle.Monospace = true
 
 	valueText := canvas.NewText(value, valueColor)
-	valueText.TextSize = 10
+	valueText.TextSize = 9
 	valueText.TextStyle.Monospace = true
 
 	return container.New(&DeviceRowControlsLayout{Gap: 6}, labelText, valueText)
@@ -184,7 +187,14 @@ func newConnectionListRouteCell(data ConnectionRowData, onChange func(string), s
 		return spacer
 	}
 	dropdown := NewHeaderDropdown(data.ProtocolOptions, data.ProtocolBadge, onChange)
-	dropdown.Compact = true
+	dropdown.UltraCompact = true
+	dropdown.CornerRadius = 6
+	dropdown.BorderColor = design.ColorTailscaleChipBorder
+	dropdown.TextColor = design.ColorConnectionBadgeText
+	dropdown.IconColor = color.NRGBA{R: 0xc5, G: 0xc8, B: 0xb5, A: 0xff}
+	dropdown.TextSize = 10
+	dropdown.HoverBorderColor = design.ColorConnectionBadgeText
+	dropdown.HoverFillColor = design.ColorGray900
 	dropdown.SetSelected(data.ProtocolBadge)
 	dropdown.SetDisabled(state.Disabled)
 	return dropdown
@@ -204,10 +214,11 @@ func newConnectionListActionsCell(item ConnectionListItem) fyne.CanvasObject {
 		Stroke:       color.Transparent,
 		LabelColor:   color.NRGBA{R: 0x4c, G: 0x68, B: 0x03, A: 0xff},
 		LabelBold:    true,
+		LabelSize:    10,
 		CornerRadius: 6,
 		NormalIcon:   connectIconResource,
-		IconSize:     fyne.NewSize(14, 14),
-		ButtonSize:   fyne.NewSize(0, 30),
+		IconSize:     fyne.NewSize(10, 10),
+		ButtonSize:   fyne.NewSize(0, 23),
 		OnTapped:     item.Actions.OnUse,
 	})
 	connectBtn.SetText("Connect")

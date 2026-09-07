@@ -704,9 +704,50 @@ func newGridCardFieldActions(entry *widget.Entry) fyne.CanvasObject {
 // stats box (LAN/TS/Token, and Name when included) -- fixed rather than
 // each label's own natural width, which varies ("Token" is nearly twice
 // "TS"'s width), so without this the entry box next to it started at a
-// different X per row instead of all lining up. Sized to fit the widest
-// label ("Token") at the shared 10px monospace labels render at.
-var connectionStatEditRowLabelWidth = fyne.MeasureText("Token", 10, fyne.TextStyle{Monospace: true}).Width
+// different X per row instead of all lining up. +8 for the same trailing
+// gap NewInset used to add on top of the label's own width -- a
+// container.NewStack(spacer, label) sizes to the *larger* of the two, so
+// "Token" (the one label wide enough that label+8 actually exceeded the
+// bare-text spacer width) ended up with a wider column than every other
+// row, the one row still visibly off after the first pass at this fix.
+// fixedWidthLabelLayout below reports exactly this width regardless of the
+// label's own size, instead of relying on that Stack-picks-the-larger-one
+// coincidence to hold for every label.
+var connectionStatEditRowLabelWidth = fyne.MeasureText("Token", 10, fyne.TextStyle{Monospace: true}).Width + 8
+
+// connectionStatEditRowActionsWidth is the copy/paste icon pair's width
+// (newGridCardFieldActions: two 15px buttons, no gap between them) --
+// reserved as blank space on rows that don't show it (Name) so their entry
+// box still ends at the same X the other rows' entry boxes do, instead of
+// stretching further right into the room actions would have taken.
+const connectionStatEditRowActionsWidth = 30
+
+// fixedWidthLabelLayout renders its one child (the label) left-anchored at
+// its own natural size, vertically centered, but reports width as exactly
+// Width regardless of the label's own MinSize -- see
+// connectionStatEditRowLabelWidth's doc comment for why this needs to be a
+// real fixed-width layout instead of a spacer sized alongside the label in
+// a Stack.
+type fixedWidthLabelLayout struct {
+	Width float32
+}
+
+func (l *fixedWidthLabelLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	if len(objects) == 0 {
+		return fyne.NewSize(0, 0)
+	}
+	return fyne.NewSize(l.Width, objects[0].MinSize().Height)
+}
+
+func (l *fixedWidthLabelLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	if len(objects) == 0 {
+		return
+	}
+	child := objects[0]
+	childMin := child.MinSize()
+	child.Move(fyne.NewPos(0, (size.Height-childMin.Height)/2))
+	child.Resize(childMin)
+}
 
 func newConnectionStatEditRow(label string, entry *widget.Entry, textSize float32, textColor color.Color, stackedActions bool, width float32, showActions bool) fyne.CanvasObject {
 	c5c8b5Color := color.NRGBA{R: 0xc5, G: 0xc8, B: 0xb5, A: 0xff}
@@ -716,16 +757,19 @@ func newConnectionStatEditRow(label string, entry *widget.Entry, textSize float3
 
 	entry.TextStyle.Monospace = true
 
-	labelSpacer := canvas.NewRectangle(color.Transparent)
-	labelSpacer.SetMinSize(fyne.NewSize(connectionStatEditRowLabelWidth, 1))
-	labelCol := container.NewStack(labelSpacer, NewInset(labelText, 0, 8, 0, 0))
+	labelCol := container.New(&fixedWidthLabelLayout{Width: connectionStatEditRowLabelWidth}, labelText)
 
 	// showActions is false for Name (see NewConnectionCardEditableStatsBox)
 	// -- nothing to copy/paste there the way an address or key benefits
-	// from.
+	// from. Still reserves connectionStatEditRowActionsWidth of blank space
+	// rather than nil -- see that constant's doc comment.
 	var actionsCol fyne.CanvasObject
 	if showActions {
 		actionsCol = container.NewCenter(newGridCardFieldActions(entry))
+	} else {
+		spacer := canvas.NewRectangle(color.Transparent)
+		spacer.SetMinSize(fyne.NewSize(connectionStatEditRowActionsWidth, 1))
+		actionsCol = spacer
 	}
 
 	// Use a fixed width for the input and push it to the right so it looks aligned

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"image/color"
 	"net/url"
-	"runtime"
 	"strings"
 
 	"usbridge-client/internal/gui/assets"
@@ -88,11 +87,11 @@ type connectionDialogSecondaryButton struct {
 // (Scan QR/Paste Link).
 const (
 	connectionDialogSecondaryIconSize    = float32(18)
-	connectionDialogSecondaryCompactIcon = float32(14)
+	connectionDialogSecondaryCompactIcon = float32(12)
 	connectionDialogSecondaryTextSize    = float32(16)
-	connectionDialogSecondaryCompactText = float32(12)
+	connectionDialogSecondaryCompactText = float32(11)
 	connectionDialogSecondaryHeight      = float32(36)
-	connectionDialogSecondaryCompactH    = float32(28)
+	connectionDialogSecondaryCompactH    = float32(26)
 	connectionDialogSecondaryPadX        = float32(16) // each side
 	connectionDialogSecondaryCompactPadX = float32(12)
 )
@@ -437,38 +436,6 @@ func newConnectionDialogEntryAddon(iconRes fyne.Resource, onTapped func()) fyne.
 	return container.NewStack(bg, bdr, btn)
 }
 
-func newConnectionDialogCopyAction(entry *connectionDialogEntry, window fyne.Window) *connectionDialogIconButton {
-	btn := &connectionDialogIconButton{
-		resource: theme.ContentCopyIcon(),
-		onTapped: func() {
-			if window != nil && entry.Text != "" {
-				window.Clipboard().SetContent(entry.Text)
-			}
-		},
-		buttonSize: fyne.NewSize(28, 28),
-		iconSize:   fyne.NewSize(15, 15),
-	}
-	btn.ExtendBaseWidget(btn)
-	return btn
-}
-
-// newConnectionDialogPasteAction is the Copy button's counterpart, sitting
-// right next to it in every field's trailing-action group -- see
-// connection_dialog_paste_wasm.go/connection_dialog_paste_default.go for
-// the platform-split clipboard read behind it.
-func newConnectionDialogPasteAction(entry *connectionDialogEntry, window fyne.Window) *connectionDialogIconButton {
-	btn := &connectionDialogIconButton{
-		resource: theme.ContentPasteIcon(),
-		onTapped: func() {
-			pasteClipboardInto(entry, window)
-		},
-		buttonSize: fyne.NewSize(28, 28),
-		iconSize:   fyne.NewSize(15, 15),
-	}
-	btn.ExtendBaseWidget(btn)
-	return btn
-}
-
 // applyPastedText replaces entry's whole content with text and fires its
 // OnChanged the same way a real keystroke/native paste would, so anything
 // wired to the field (live validation, draft persistence) still runs.
@@ -477,15 +444,6 @@ func applyPastedText(entry *connectionDialogEntry, text string) {
 	if entry.OnChanged != nil {
 		entry.OnChanged(text)
 	}
-}
-
-// fieldActions bundles the Copy and Paste buttons for one field into a
-// single trailing-action group.
-func fieldActions(entry *connectionDialogEntry, window fyne.Window) fyne.CanvasObject {
-	return container.NewHBox(
-		newConnectionDialogCopyAction(entry, window),
-		newConnectionDialogPasteAction(entry, window),
-	)
 }
 
 // connectionDialogRegisterRow is the "Register in Tailscale" row: a bordered
@@ -657,49 +615,26 @@ func (rr *connectionDialogRegisterRowRenderer) Objects() []fyne.CanvasObject {
 }
 func (rr *connectionDialogRegisterRowRenderer) Destroy() {}
 
-func buildConnectionDialogForm(nameEntry, internalHostEntry, tailscaleHostEntry, masterKeyEntry *connectionDialogEntry, registerCheck fyne.CanvasObject, window fyne.Window) fyne.CanvasObject {
-	masterKeyEntry.ActionItem = nil
-	masterKeyEntry.Refresh()
-
+// buildConnectionDialogForm assembles the form body: Name (its own row,
+// same newConnectionDialogIconEntry chrome as before) + statsBox (the
+// LAN/TS/Token block -- view.NewConnectionCardEditableStatsBox, the exact
+// widget/styling the Grid card's inline edit and List's split-edit panel
+// already use) + the optional register-in-Tailscale row.
+//
+// This dropped the old per-platform Tailscale-field handling (a hint +
+// download link instead of the field itself on wasm, where there's no
+// embedded tsnet to dial it with) -- statsBox always shows all three rows,
+// same as the Grid/List surfaces it's shared with, neither of which special-
+// cases wasm here either.
+func buildConnectionDialogForm(nameEntry *connectionDialogEntry, statsBox fyne.CanvasObject, registerCheck fyne.CanvasObject) fyne.CanvasObject {
 	items := []fyne.CanvasObject{
 		newConnectionDialogIconEntry(theme.AccountIcon(), nameEntry, nil),
-		newConnectionDialogIconEntry(theme.ComputerIcon(), internalHostEntry, fieldActions(internalHostEntry, window)),
+		statsBox,
 	}
-	// No embedded tsnet in a browser tab (tailscale_service_wasm.go is a
-	// stub, same reasoning as normalizeConnectionProtocol's wasm override
-	// in connection_manager.go) -- every web connection is LAN-only, so
-	// this field has nothing to actually do there and just invites users
-	// to fill in an address that will never be dialed. Native builds
-	// (desktop/Android/iOS) keep it.
-	if runtime.GOOS != "js" {
-		items = append(items, newConnectionDialogIconEntry(assets.NetworkIcon, tailscaleHostEntry, fieldActions(tailscaleHostEntry, window)))
-	} else {
-		items = append(items, newWebTailscaleHint(window))
-	}
-	items = append(items, newConnectionDialogIconEntry(theme.VisibilityOffIcon(), masterKeyEntry, fieldActions(masterKeyEntry, window)))
 	if registerCheck != nil {
 		items = append(items, view.NewInset(registerCheck, 10, 0, 0, 0))
 	}
 	return container.NewVBox(items...)
-}
-
-// newWebTailscaleHint replaces the Tailscale-address field in the browser
-// build (see buildConnectionDialogForm's own doc comment on why that field
-// is omitted there): a Tailscale/100.x.x.x address typed into "internal ip
-// address" above still works from a browser tab -- dialTailscaleTarget
-// (main_window_connection_tailscale_wasm.go) just dials it as a plain host,
-// same as any LAN address -- but only if a real Tailscale client is
-// already running on this device, since the wasm sandbox can't embed tsnet
-// itself. This note exists so that requirement isn't silently discovered
-// as a connection failure.
-func newWebTailscaleHint(window fyne.Window) fyne.CanvasObject {
-	text := widget.NewLabel("Tailscale requires a local client to connect from an external network:")
-	text.Wrapping = fyne.TextWrapWord
-
-	u, _ := url.Parse("https://tailscale.com/download")
-	link := widget.NewHyperlink("tailscale.com/download", u)
-
-	return view.NewInset(container.NewVBox(text, link), 10, 0, 0, 0)
 }
 
 func newConnectionDialogFeedback(text string, fill color.Color) fyne.CanvasObject {
@@ -876,9 +811,16 @@ func showAdaptiveConnectionDialog(parent fyne.Window, dialogTitle, subtitle stri
 		iconTile.StrokeWidth = 1
 		iconBox := container.NewStack(iconTile, container.NewCenter(iconImg))
 		iconBoxSized := container.NewGridWrap(fyne.NewSize(44, 44), iconBox)
-		titleBar = container.NewBorder(nil, nil, iconBoxSized, container.NewCenter(closeBtn), container.NewCenter(titleCol))
+		titleBar = container.NewBorder(nil, nil, iconBoxSized, container.NewVBox(closeBtn), container.NewCenter(titleCol))
 	} else {
-		titleBar = container.NewBorder(nil, nil, nil, container.NewCenter(closeBtn), container.NewCenter(titleCol))
+		// container.NewVBox, not NewCenter, for closeBtn -- Border stretches
+		// the right slot to the row's *full* height (title+subtitle
+		// together), and NewCenter centered closeBtn against that whole
+		// two-line block instead of just the title line, reading as sitting
+		// too low. VBoxLayout top-aligns its one child regardless of how
+		// much extra height it's given, landing closeBtn level with title's
+		// own line instead.
+		titleBar = container.NewBorder(nil, nil, nil, container.NewVBox(closeBtn), container.NewCenter(titleCol))
 	}
 
 	// A thin teal-to-lime gradient line along the panel's very top edge --
@@ -972,7 +914,11 @@ func showAdaptiveConnectionDialog(parent fyne.Window, dialogTitle, subtitle stri
 	// every child to the same full width regardless of what any *other*
 	// child's own inset bakes in, which is what makes mixing full-bleed and
 	// inset children in one VBox work here.
-	headerBlock := container.NewVBox(topAccent, view.NewInset(titleBar, 18, 18, 10, 10), sep)
+	// top=18 (not 10): headerBlock only contributes topAccent's own 2px
+	// before this, well short of the ~22px total gap the panel used to have
+	// when the outer wrap alone supplied 12px of top padding here -- 18+2
+	// gets back to roughly that same breathing room above the title.
+	headerBlock := container.NewVBox(topAccent, view.NewInset(titleBar, 18, 18, 18, 10), sep)
 	inner := container.NewBorder(
 		headerBlock,
 		view.NewInset(buttons, 18, 18, 14, 0),
@@ -1016,9 +962,14 @@ func showAdaptiveConnectionDialog(parent fyne.Window, dialogTitle, subtitle stri
 
 func showConnectionEditorDialog(parent fyne.Window, window fyne.Window, spec connectionDialogSpec) *widget.PopUp {
 	nameEntry := newConnectionNameEntry(spec.nameValue, nil)
-	internalHostEntry := newConnectionHostEntry(spec.internalHostValue, nil)
-	tailscaleHostEntry := newConnectionTailscaleEntry(spec.tailscaleHostValue, nil)
-	masterKeyEntry := newConnectionMasterKeyEntry(spec.masterKeyValue, nil)
+
+	// The same LAN/TS/Token box (labels, placeholders, copy/paste icons,
+	// dark styling) the Grid card's inline edit and List's split-edit panel
+	// already use -- entryWidth 0 so the entry fills the row instead of
+	// sitting at their fixed 160px (this dialog is much wider than either).
+	statsBox, lanEntry, tsEntry, tokenEntry := view.NewConnectionCardEditableStatsBox(
+		spec.internalHostValue, spec.tailscaleHostValue, spec.masterKeyValue, 0,
+	)
 
 	registerCheck := newConnectionDialogRegisterRow(
 		spec.tailscaleRegisterValue && tailscaleRegisterUISupported(),
@@ -1037,11 +988,11 @@ func showConnectionEditorDialog(parent fyne.Window, window fyne.Window, spec con
 		registerCheckContainer.Refresh()
 	}
 	updateRegisterVisibility(spec.tailscaleHostValue)
-	tailscaleHostEntry.OnChanged = func(text string) {
+	tsEntry.OnChanged = func(text string) {
 		updateRegisterVisibility(text)
 	}
 
-	form := buildConnectionDialogForm(nameEntry, internalHostEntry, tailscaleHostEntry, masterKeyEntry, registerCheckContainer, window)
+	form := buildConnectionDialogForm(nameEntry, statsBox, registerCheckContainer)
 
 	var d *widget.PopUp
 
@@ -1056,12 +1007,16 @@ func showConnectionEditorDialog(parent fyne.Window, window fyne.Window, spec con
 		})
 		linkBtn := newConnectionDialogWideActionButton("Paste Link", assets.ConnectionStatusAccent, design.ColorConnectionAddFill, func() {
 			showPasteLinkDialog(parent, func(ih, th, mk string) {
-				internalHostEntry.SetText(ih)
-				tailscaleHostEntry.SetText(th)
-				masterKeyEntry.SetText(mk)
+				lanEntry.SetText(ih)
+				tsEntry.SetText(th)
+				tokenEntry.SetText(mk)
 			})
 		})
-		iconRow := container.New(&view.DeviceRowControlsLayout{Gap: 10}, qrBtn, linkBtn)
+		// Full width (equal split, GridWithColumns), not the buttons' own
+		// natural/content width -- they should span the same width as the
+		// fields below them; compact keeps their icon/text/height small
+		// regardless of how wide the button box around that content ends up.
+		iconRow := container.NewGridWithColumns(2, qrBtn, linkBtn)
 
 		if view.UseCompactLayout(parent.Canvas().Size().Width) {
 			// On Android/narrow browser viewports: icon row floats OUTSIDE
@@ -1109,7 +1064,7 @@ func showConnectionEditorDialog(parent fyne.Window, window fyne.Window, spec con
 			connectLabel = i18n.Current.DeepLinkConnect
 		}
 		btn := newConnectionDialogPrimaryButton(connectLabel, spec.connectIcon, func() {
-			if spec.onConnect != nil && !spec.onConnect(nameEntry.Text, internalHostEntry.Text, tailscaleHostEntry.Text, masterKeyEntry.Text, registerCheck.Checked) {
+			if spec.onConnect != nil && !spec.onConnect(nameEntry.Text, lanEntry.Text, tsEntry.Text, tokenEntry.Text, registerCheck.Checked) {
 				return
 			}
 			if d != nil {
@@ -1120,7 +1075,7 @@ func showConnectionEditorDialog(parent fyne.Window, window fyne.Window, spec con
 	}
 
 	btn := view.NewConnectionPrimaryButton(saveLabel, func() {
-		if spec.onSave != nil && !spec.onSave(nameEntry.Text, internalHostEntry.Text, tailscaleHostEntry.Text, masterKeyEntry.Text, registerCheck.Checked) {
+		if spec.onSave != nil && !spec.onSave(nameEntry.Text, lanEntry.Text, tsEntry.Text, tokenEntry.Text, registerCheck.Checked) {
 			return
 		}
 		if d != nil {
@@ -1132,7 +1087,7 @@ func showConnectionEditorDialog(parent fyne.Window, window fyne.Window, spec con
 
 	if spec.onConnect != nil && spec.onDelete == nil {
 		btn := view.NewConnectionPrimaryButton(saveLabel, func() {
-			if spec.onSave != nil && !spec.onSave(nameEntry.Text, internalHostEntry.Text, tailscaleHostEntry.Text, masterKeyEntry.Text, registerCheck.Checked) {
+			if spec.onSave != nil && !spec.onSave(nameEntry.Text, lanEntry.Text, tsEntry.Text, tokenEntry.Text, registerCheck.Checked) {
 				return
 			}
 			if d != nil {
@@ -1248,31 +1203,6 @@ func newConnectionNameEntry(value string, onFocusChanged func(bool)) *connection
 	entry.ExtendBaseWidget(entry)
 	entry.Text = value
 	entry.SetPlaceHolder("Name")
-	return entry
-}
-
-func newConnectionHostEntry(value string, onFocusChanged func(bool)) *connectionDialogEntry {
-	entry := &connectionDialogEntry{onFocusChanged: onFocusChanged}
-	entry.ExtendBaseWidget(entry)
-	entry.Text = value
-	entry.SetPlaceHolder("Internal IP")
-	return entry
-}
-
-func newConnectionTailscaleEntry(value string, onFocusChanged func(bool)) *connectionDialogEntry {
-	entry := &connectionDialogEntry{onFocusChanged: onFocusChanged}
-	entry.ExtendBaseWidget(entry)
-	entry.Text = value
-	entry.SetPlaceHolder("Tailscale Address")
-	return entry
-}
-
-func newConnectionMasterKeyEntry(value string, onFocusChanged func(bool)) *connectionDialogEntry {
-	entry := &connectionDialogEntry{onFocusChanged: onFocusChanged}
-	entry.ExtendBaseWidget(entry)
-	entry.Text = value
-	entry.SetPlaceHolder("Master Key")
-	entry.Password = false
 	return entry
 }
 

@@ -21,6 +21,7 @@ import (
 	"image/color"
 	"strings"
 
+	"usbridge-client/internal/gui/assets"
 	"usbridge-client/internal/gui/design"
 
 	"fyne.io/fyne/v2"
@@ -52,12 +53,14 @@ type ConnectionEditPanelActions struct {
 
 // NewConnectionEditPanel builds List's split-edit panel.
 func NewConnectionEditPanel(data ConnectionEditPanelData, actions ConnectionEditPanelActions) fyne.CanvasObject {
-	statusIndicator := newConnectionCardStatusIndicator(data.RemoteOS)
+	statusIndicator := newConnectionEditPanelStatusIndicator(data.RemoteOS)
 
 	nameEntry := widget.NewEntry()
 	nameEntry.SetPlaceHolder("Name")
 	nameEntry.SetText(strings.TrimSpace(data.Name))
 	nameEntry.TextStyle = fyne.TextStyle{Bold: true}
+
+	topRow := container.NewBorder(nil, nil, container.NewCenter(NewInset(statusIndicator, 0, 0, 8, 0)), nil, wrapGridCardEntry(nameEntry, 13, design.ColorTextLight))
 
 	cancelIcon := fyne.NewStaticResource("connection-cancel-edit.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#c5c8b5"><path d="M18.3 5.71 12 12.01l-6.3-6.3-1.41 1.41 6.3 6.3-6.3 6.3 1.41 1.41 6.3-6.3 6.3 6.3 1.41-1.41-6.3-6.3 6.3-6.3z"/></svg>`))
 	cancelBtn := newIconChromeButton(iconChromeButtonSpec{
@@ -72,8 +75,6 @@ func NewConnectionEditPanel(data ConnectionEditPanelData, actions ConnectionEdit
 		ButtonSize:   fyne.NewSize(26, 26),
 		OnTapped:     actions.OnCancel,
 	})
-
-	topRow := container.NewBorder(nil, nil, container.NewCenter(statusIndicator), nil, wrapGridCardEntry(nameEntry, 13, design.ColorTextLight))
 
 	statsBox, lanEntry, tailscaleEntry, tokenEntry := newConnectionCardEditableStatsBox(data.LANAddress, data.TailscaleAddress, data.MasterKey)
 
@@ -112,7 +113,7 @@ func NewConnectionEditPanel(data ConnectionEditPanelData, actions ConnectionEdit
 	actionsBox := container.New(&DeviceRowControlsLayout{Gap: 8}, deleteBtn, saveBtn, cancelBtn)
 	bottomRow := container.NewBorder(nil, nil, nil, actionsBox)
 
-	content := NewInset(container.NewVBox(topRow, statsBox, NewInset(bottomRow, 5, 0, 0, 0)), 14, 14, 14, 14)
+	content := NewInset(container.NewVBox(topRow, statsBox, NewInset(bottomRow, 20, 0, 0, 0)), 14, 14, 14, 14)
 
 	bg := canvas.NewRectangle(design.ColorGray900)
 	bg.CornerRadius = design.RadiusLG
@@ -128,4 +129,25 @@ func NewConnectionEditPanel(data ConnectionEditPanelData, actions ConnectionEdit
 	// never stretches it, letting the table absorb whatever room is left
 	// instead.
 	return container.NewStack(bg, content)
+}
+
+func newConnectionEditPanelStatusIndicator(remoteOS string) fyne.CanvasObject {
+	const size = float32(20)
+	isAgent, isKVM := ClassifyConnectionRemoteOS(remoteOS)
+	var res fyne.Resource
+	switch {
+	case isKVM:
+		res = assets.USBridgeOSIconAccent
+	case isAgent:
+		res = agentOSIconResource(remoteOS)
+	}
+	if res != nil {
+		img := canvas.NewImageFromResource(res)
+		img.FillMode = canvas.ImageFillContain
+		img.SetMinSize(fyne.NewSize(size, size))
+		return container.NewGridWrap(fyne.NewSize(size, size), img)
+	}
+	dot := canvas.NewCircle(design.ColorBorder)
+	dotWrap := container.NewGridWrap(fyne.NewSize(10, 10), dot)
+	return container.NewGridWrap(fyne.NewSize(size, size), container.NewCenter(dotWrap))
 }

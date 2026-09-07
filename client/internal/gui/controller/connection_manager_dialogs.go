@@ -60,20 +60,69 @@ type connectionDialogSpec struct {
 type connectionDialogSecondaryButton struct {
 	widget.BaseWidget
 
-	labelText      string
-	onTapped       func()
-	hovered        bool
-	fillColor      color.Color
-	borderColor    color.Color
-	textColor      color.Color
-	hoverFillColor color.Color
-	hoverTextColor color.Color
-	iconRes        fyne.Resource
-	hoverIconRes   fyne.Resource
-	bg             *canvas.Rectangle
-	border         *canvas.Rectangle
-	label          *canvas.Text
-	icon           *canvas.Image
+	labelText   string
+	onTapped    func()
+	hovered     bool
+	fillColor   color.Color
+	borderColor color.Color
+	textColor   color.Color
+	// hoverBorderColor overrides borderColor while hovered -- nil (the zero
+	// value) keeps borderColor unchanged on hover, the behavior every
+	// existing caller before Scan QR/Paste Link relied on.
+	hoverBorderColor color.Color
+	hoverFillColor   color.Color
+	hoverTextColor   color.Color
+	iconRes          fyne.Resource
+	hoverIconRes     fyne.Resource
+	// compact shrinks the icon/text/height/padding this button renders at --
+	// Scan QR/Paste Link only; every other caller (Cancel, the danger
+	// Delete button) keeps the original, larger sizing.
+	compact bool
+	bg      *canvas.Rectangle
+	border  *canvas.Rectangle
+	label   *canvas.Text
+	icon    *canvas.Image
+}
+
+// connectionDialogSecondaryButton's size constants -- normal vs. compact
+// (Scan QR/Paste Link).
+const (
+	connectionDialogSecondaryIconSize    = float32(18)
+	connectionDialogSecondaryCompactIcon = float32(14)
+	connectionDialogSecondaryTextSize    = float32(16)
+	connectionDialogSecondaryCompactText = float32(12)
+	connectionDialogSecondaryHeight      = float32(36)
+	connectionDialogSecondaryCompactH    = float32(28)
+	connectionDialogSecondaryPadX        = float32(16) // each side
+	connectionDialogSecondaryCompactPadX = float32(12)
+)
+
+func (b *connectionDialogSecondaryButton) iconSize() float32 {
+	if b.compact {
+		return connectionDialogSecondaryCompactIcon
+	}
+	return connectionDialogSecondaryIconSize
+}
+
+func (b *connectionDialogSecondaryButton) textSize() float32 {
+	if b.compact {
+		return connectionDialogSecondaryCompactText
+	}
+	return connectionDialogSecondaryTextSize
+}
+
+func (b *connectionDialogSecondaryButton) height() float32 {
+	if b.compact {
+		return connectionDialogSecondaryCompactH
+	}
+	return connectionDialogSecondaryHeight
+}
+
+func (b *connectionDialogSecondaryButton) padX() float32 {
+	if b.compact {
+		return connectionDialogSecondaryCompactPadX
+	}
+	return connectionDialogSecondaryPadX
 }
 
 type connectionDialogEntry struct {
@@ -175,6 +224,13 @@ func newConnectionDialogAccentButton(label string, icon fyne.Resource, onTapped 
 	return btn
 }
 
+func (b *connectionDialogSecondaryButton) iconLabelGap() float32 {
+	if b.compact {
+		return 4
+	}
+	return 6
+}
+
 func (b *connectionDialogSecondaryButton) CreateRenderer() fyne.WidgetRenderer {
 	b.bg = canvas.NewRectangle(color.Transparent)
 	b.bg.CornerRadius = design.RadiusMD
@@ -185,7 +241,7 @@ func (b *connectionDialogSecondaryButton) CreateRenderer() fyne.WidgetRenderer {
 	b.border.StrokeWidth = 1
 
 	b.label = canvas.NewText(b.labelText, b.textColor)
-	b.label.TextSize = 16
+	b.label.TextSize = b.textSize()
 	b.label.TextStyle.Bold = true
 	b.label.Alignment = fyne.TextAlignCenter
 
@@ -194,13 +250,14 @@ func (b *connectionDialogSecondaryButton) CreateRenderer() fyne.WidgetRenderer {
 	if b.iconRes == nil {
 		b.icon.Hide()
 	} else {
-		b.icon.SetMinSize(fyne.NewSize(18, 18))
+		iconSz := b.iconSize()
+		b.icon.SetMinSize(fyne.NewSize(iconSz, iconSz))
 	}
 
 	b.refreshVisuals()
 	content := container.NewCenter(container.NewHBox(
 		b.icon,
-		view.NewInset(b.label, 6, 0, 0, 0),
+		view.NewInset(b.label, b.iconLabelGap(), 0, 0, 0),
 	))
 	if b.iconRes == nil {
 		content = container.NewCenter(b.label)
@@ -213,16 +270,16 @@ func (b *connectionDialogSecondaryButton) MinSize() fyne.Size {
 	// this inside a container.NewGridWithColumns, which stretches each cell
 	// regardless of its MinSize.Width, so 0 never actually showed up as a
 	// collapsed button there. A right-aligned natural-width group (see
-	// showAdaptiveConnectionDialog's footer) has no such stretch to hide
-	// behind, and needs the real number.
+	// showAdaptiveConnectionDialog's footer, and Scan QR/Paste Link's own
+	// row) has no such stretch to hide behind, and needs the real number.
 	measure := canvas.NewText(b.labelText, color.Black)
-	measure.TextSize = 16
+	measure.TextSize = b.textSize()
 	measure.TextStyle.Bold = true
-	width := measure.MinSize().Width + 32
+	width := measure.MinSize().Width + b.padX()*2
 	if b.iconRes != nil {
-		width += 24 // icon width (18) + its gap to the label (6)
+		width += b.iconSize() + b.iconLabelGap()
 	}
-	return fyne.NewSize(width, 36)
+	return fyne.NewSize(width, b.height())
 }
 
 func (b *connectionDialogSecondaryButton) Tapped(*fyne.PointEvent) {
@@ -261,8 +318,11 @@ func (b *connectionDialogSecondaryButton) refreshVisuals() {
 		if b.hoverIconRes != nil {
 			b.icon.Resource = b.hoverIconRes
 		}
+		if b.hoverBorderColor != nil {
+			b.border.StrokeColor = b.hoverBorderColor
+		}
 	}
-	if b.borderColor != nil && b.borderColor != color.Transparent {
+	if b.border.StrokeColor != nil && b.border.StrokeColor != color.Transparent {
 		b.border.StrokeWidth = 1
 	}
 
@@ -653,15 +713,6 @@ func connectionDialogDimColor() color.Color {
 	return color.NRGBA{R: 0x00, G: 0x00, B: 0x00, A: 0x72}
 }
 
-// connectionDialogTerminalIcon is the small square tile icon next to "Add
-// connection"'s title/subtitle (see connectionDialogSpec.icon) -- a plain
-// rectangle outline + ">" chevron + "_" cursor, drawn with only straight
-// line segments (M/L/Z, no arcs) since every icon in this codebase that
-// relies on SVG arc commands has failed to render through Fyne's SVG
-// rasterizer (see connection_add_grid_card.go's own note on the same
-// issue).
-var connectionDialogTerminalIcon = fyne.NewStaticResource("connection-dialog-terminal.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#c4e77a" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5 L21 5 L21 19 L3 19 Z M7.5 9.5 L11 12.5 L7.5 15.5 M13 15.5 L17 15.5"/></svg>`)) // #c4e77a is design.ColorConnectionAddFill
-
 func newConnectionDialogQRButton(label string, onTapped func()) *connectionDialogSecondaryButton {
 	btn := &connectionDialogSecondaryButton{
 		labelText:      label,
@@ -834,8 +885,21 @@ func showAdaptiveConnectionDialog(parent fyne.Window, dialogTitle, subtitle stri
 	// same two accent colors (design.ColorConnectionBadgeText/
 	// ColorConnectionAddFill) the rest of this screen already uses for its
 	// "commit" actions (Save/Connect), just as a hairline instead of a fill.
-	topAccent := canvas.NewHorizontalGradient(design.ColorConnectionBadgeText, design.ColorConnectionAddFill)
-	topAccent.SetMinSize(fyne.NewSize(1, 2))
+	// Faded to transparent at both ends (3 segments, not 1 flat gradient)
+	// rather than run edge-to-edge -- a hard-edged bar butting straight into
+	// the panel's rounded top corners read as crooked/misaligned there; a
+	// fade reads as intentional regardless of exactly where it meets the
+	// curve.
+	teal := design.ColorConnectionBadgeText
+	lime := design.ColorConnectionAddFill
+	tealTransparent := color.NRGBA{R: 0x41, G: 0xe0, B: 0xc3, A: 0}
+	limeTransparent := color.NRGBA{R: 0xc4, G: 0xe7, B: 0x7a, A: 0}
+	accentLeftFade := canvas.NewHorizontalGradient(tealTransparent, teal)
+	accentLeftFade.SetMinSize(fyne.NewSize(70, 2))
+	accentRightFade := canvas.NewHorizontalGradient(lime, limeTransparent)
+	accentRightFade.SetMinSize(fyne.NewSize(70, 2))
+	accentMid := canvas.NewHorizontalGradient(teal, lime)
+	topAccent := container.NewBorder(nil, nil, accentLeftFade, accentRightFade, accentMid)
 
 	// Cancel sits at the opposite end of the footer from Connect/Save --
 	// same close action as the header's X, just also reachable from where
@@ -900,20 +964,24 @@ func showAdaptiveConnectionDialog(parent fyne.Window, dialogTitle, subtitle stri
 	sep.SetMinSize(fyne.NewSize(0, 1))
 
 	// Panel layout: title fixed at top, buttons fixed at bottom, scroll fills
-	// center -- all inset from the panel edges. topAccent is the one
-	// exception: it's added to the outer Stack below, edge-to-edge and
-	// un-inset, so it actually reaches the panel's left/right/top edges
-	// instead of sitting 18px in from them like everything else here.
+	// center. titleBar/buttons/scroll each carry their own 18px left/right
+	// inset now (rather than one uniform inset around all of `inner`), so
+	// topAccent and sep -- both raw/uninset, sharing headerBlock's VBox with
+	// titleBar -- stay full-bleed to the panel's left/right edges while
+	// titleBar still reads with its own margin: container.NewVBox resizes
+	// every child to the same full width regardless of what any *other*
+	// child's own inset bakes in, which is what makes mixing full-bleed and
+	// inset children in one VBox work here.
+	headerBlock := container.NewVBox(topAccent, view.NewInset(titleBar, 18, 18, 10, 10), sep)
 	inner := container.NewBorder(
-		container.NewVBox(view.NewInset(titleBar, 0, 0, 10, 10), sep),
-		view.NewInset(buttons, 0, 0, 14, 0),
+		headerBlock,
+		view.NewInset(buttons, 18, 18, 14, 0),
 		nil, nil,
-		scroll,
+		view.NewInset(scroll, 18, 18, 0, 0),
 	)
 	panel := container.NewStack(
 		bg,
-		view.NewInset(inner, 18, 18, 12, 16),
-		container.NewBorder(topAccent, nil, nil, nil),
+		view.NewInset(inner, 0, 0, 0, 16),
 		border,
 	)
 
@@ -980,20 +1048,20 @@ func showConnectionEditorDialog(parent fyne.Window, window fyne.Window, spec con
 	var formContent fyne.CanvasObject = form
 	var mobileFooter fyne.CanvasObject
 	if spec.onQR != nil {
-		qrBtn := newConnectionDialogWideActionButton("Scan QR", assets.QRCodeAccent, func() {
+		qrBtn := newConnectionDialogWideActionButton("Scan QR", assets.QRCodeTeal, design.ColorConnectionBadgeText, func() {
 			if d != nil {
 				d.Hide()
 			}
 			spec.onQR()
 		})
-		linkBtn := newConnectionDialogWideActionButton("Paste Link", assets.ConnectionStatusAccent, func() {
+		linkBtn := newConnectionDialogWideActionButton("Paste Link", assets.ConnectionStatusAccent, design.ColorConnectionAddFill, func() {
 			showPasteLinkDialog(parent, func(ih, th, mk string) {
 				internalHostEntry.SetText(ih)
 				tailscaleHostEntry.SetText(th)
 				masterKeyEntry.SetText(mk)
 			})
 		})
-		iconRow := container.NewGridWithColumns(2, qrBtn, linkBtn)
+		iconRow := container.New(&view.DeviceRowControlsLayout{Gap: 10}, qrBtn, linkBtn)
 
 		if view.UseCompactLayout(parent.Canvas().Size().Width) {
 			// On Android/narrow browser viewports: icon row floats OUTSIDE
@@ -1091,21 +1159,26 @@ func showConnectionEditorDialog(parent fyne.Window, window fyne.Window, spec con
 }
 
 // newConnectionDialogWideActionButton is the QR/Paste Link row's shared
-// look: a full-width bordered pill (neutral gray border, bold white label,
-// an accent-tinted icon) -- newConnectionDialogIconBlock's square icon-over-
-// label shape doesn't match this dialog's current design anymore, but
-// stayed in place since something else may still want it later.
-func newConnectionDialogWideActionButton(label string, iconRes fyne.Resource, onTapped func()) *connectionDialogSecondaryButton {
+// look: a small bordered pill (neutral gray border, bold white label, an
+// accent-tinted icon), sized to its own content -- not the full-width
+// square-icon-over-label block newConnectionDialogIconBlock used to render
+// here, which read as oversized next to the rest of this dialog.
+// hoverBorder is the border color this button's own hover swaps to (teal
+// for Scan QR, lime for Paste Link) -- on top of, not instead of, the
+// whole-dialog hover state some other bordered rows in this file have.
+func newConnectionDialogWideActionButton(label string, iconRes fyne.Resource, hoverBorder color.Color, onTapped func()) *connectionDialogSecondaryButton {
 	btn := &connectionDialogSecondaryButton{
-		labelText:      label,
-		onTapped:       onTapped,
-		fillColor:      color.Transparent,
-		borderColor:    design.ColorTailscaleChipBorder,
-		textColor:      design.ColorTextLight,
-		hoverFillColor: design.ColorSurfaceLight,
-		hoverTextColor: design.ColorTextLight,
-		iconRes:        iconRes,
-		hoverIconRes:   iconRes,
+		labelText:        label,
+		onTapped:         onTapped,
+		compact:          true,
+		fillColor:        color.Transparent,
+		borderColor:      design.ColorTailscaleChipBorder,
+		textColor:        design.ColorTextLight,
+		hoverFillColor:   design.ColorSurfaceLight,
+		hoverTextColor:   design.ColorTextLight,
+		hoverBorderColor: hoverBorder,
+		iconRes:          iconRes,
+		hoverIconRes:     iconRes,
 	}
 	btn.ExtendBaseWidget(btn)
 	return btn
@@ -1121,7 +1194,53 @@ func newConnectionDialogManualDivider() fyne.CanvasObject {
 	label.TextSize = 9
 	label.TextStyle = fyne.TextStyle{Monospace: true}
 
-	return container.NewBorder(nil, nil, nil, view.NewInset(label, 10, 0, 0, 0), line)
+	// Not container.NewBorder(nil,nil,nil,label,line) -- Border's center
+	// slot (line, here) always stretches to fill the *whole* row height,
+	// not just its own MinSize, so line rendered as thick as the label's
+	// text line (~13px) instead of the 1px it actually asked for.
+	// thinDividerLayout keeps line's own height (1px) regardless of how
+	// tall the label next to it is.
+	return container.New(&thinDividerLayout{gap: 10}, line, label)
+}
+
+// thinDividerLayout lays out exactly 2 children: a line that fills all the
+// row's width except what the label (right-pinned, its own natural size)
+// needs -- and, unlike container.NewBorder's center slot, keeps the line at
+// its own MinSize height (vertically centered in the row) instead of
+// stretching it to match the row's height.
+type thinDividerLayout struct {
+	gap float32
+}
+
+func (l *thinDividerLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	if len(objects) < 2 {
+		return fyne.NewSize(0, 0)
+	}
+	line, label := objects[0], objects[1]
+	lineMin := line.MinSize()
+	labelMin := label.MinSize()
+	height := maxFloat32(lineMin.Height, labelMin.Height)
+	return fyne.NewSize(lineMin.Width+l.gap+labelMin.Width, height)
+}
+
+func (l *thinDividerLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	if len(objects) < 2 {
+		return
+	}
+	line, label := objects[0], objects[1]
+
+	labelMin := label.MinSize()
+	labelX := maxFloat32(0, size.Width-labelMin.Width)
+	label.Move(fyne.NewPos(labelX, (size.Height-labelMin.Height)/2))
+	label.Resize(labelMin)
+
+	lineHeight := line.MinSize().Height
+	if lineHeight <= 0 {
+		lineHeight = 1
+	}
+	lineWidth := maxFloat32(0, labelX-l.gap)
+	line.Move(fyne.NewPos(0, (size.Height-lineHeight)/2))
+	line.Resize(fyne.NewSize(lineWidth, lineHeight))
 }
 
 func newConnectionNameEntry(value string, onFocusChanged func(bool)) *connectionDialogEntry {
@@ -1325,8 +1444,7 @@ func (cm *ConnectionManager) showPrefilledAddDialog(name, internalHost, tailscal
 
 	showConnectionEditorDialog(cm.window, cm.window, connectionDialogSpec{
 		title:                  i18n.Current.AddConnectionTitle,
-		subtitle:               "Pair hardware KVM node via IP address, Tailscale mesh, or quick link.",
-		icon:                   connectionDialogTerminalIcon,
+		subtitle:               "Pair a hardware or software agent using its IP address and master key.",
 		connectLabel:           i18n.Current.DeepLinkConnect,
 		connectIcon:            nil,
 		saveLabel:              i18n.Current.DeepLinkSave,

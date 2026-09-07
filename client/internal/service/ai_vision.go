@@ -213,11 +213,13 @@ func maybeKickIconDetection(rgba []byte, w, h, stride int) {
 	}()
 }
 
-// maybeKickOCR copies the current frame and runs the full icons+text pass
-// (localui.Parser.ParseFast) on a background goroutine, at most once per
-// aiVisionOCRInterval and never while a previous OCR pass is still
-// running. Independent of maybeKickIconDetection above -- see the package
-// doc comment.
+// maybeKickOCR copies the current frame and runs icons+text, restricted to
+// text near a detected icon (localui.Parser.ParseFastNearIcons -- see its
+// doc comment for why this is the right tradeoff for a live preview
+// specifically, and not for MCP's ui.parse), on a background goroutine, at
+// most once per aiVisionOCRInterval and never while a previous OCR pass is
+// still running. Independent of maybeKickIconDetection above -- see the
+// package doc comment.
 func maybeKickOCR(rgba []byte, w, h, stride int) {
 	now := time.Now().UnixNano()
 	if now-aiVisionOCRLastRun.Load() < int64(aiVisionOCRInterval) {
@@ -244,7 +246,7 @@ func maybeKickOCR(rgba []byte, w, h, stride int) {
 			logrus.Warnf("🔎 [AI Vision] OCR frame encode failed: %v", err)
 			return
 		}
-		result, err := parser.ParseFast(buf.Bytes())
+		result, err := parser.ParseFastNearIcons(buf.Bytes())
 		if err != nil {
 			logrus.Warnf("🔎 [AI Vision] detection pass failed: %v", err)
 			return

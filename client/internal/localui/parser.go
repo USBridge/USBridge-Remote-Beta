@@ -129,7 +129,7 @@ func (p *Parser) Close() {
 // plus the structured result, in the same shape as the device's own
 // ui.parse response (see types.go).
 func (p *Parser) Parse(imgBytes []byte) (markedPNG []byte, result *Result, err error) {
-	return p.parse(imgBytes, true, nil)
+	return p.parse(imgBytes, true, nil, nil)
 }
 
 // ParseFast is Parse without producing the annotated marked-up PNG: it
@@ -144,7 +144,29 @@ func (p *Parser) Parse(imgBytes []byte) (markedPNG []byte, result *Result, err e
 // ui.parse (local_ui_intercept.go) keeps using plain Parse: its JSON-RPC
 // result actually returns the annotated image to the caller.
 func (p *Parser) ParseFast(imgBytes []byte) (result *Result, err error) {
-	_, result, err = p.parse(imgBytes, false, nil)
+	_, result, err = p.parse(imgBytes, false, nil, nil)
+	return result, err
+}
+
+// ParseFastNearIcons is ParseFast, plus one more filter: after dbnet finds
+// text boxes and before the expensive SVTR OCR stage runs on them, boxes
+// with no detected icon within nearIconGap pixels (labels.go) are dropped.
+// Standalone text with no nearby icon -- a paragraph, a line of code, a
+// filename far from any button -- never gets OCR'd at all.
+//
+// This is NOT what MCP's ui.parse (local_ui_intercept.go, via plain
+// ParseFast/Parse) should ever use: an agent may legitimately need to read
+// arbitrary on-screen text that has nothing to do with an icon. It's built
+// for ai_vision.go's live *preview* overlay instead, where an operator
+// mainly cares what's clickable and how it's labeled -- and where, on a
+// text-heavy screen (an IDE, a document), most dbnet-detected boxes aren't
+// icon labels at all. Measured on a real dense code-editor screenshot via
+// cmd/localui_bench -near-icons -- see that run's numbers for the actual
+// before/after crop count and timing (results vary a lot by how
+// icon-dense vs. text-dense a given frame is, unlike the roughly-fixed
+// percentages the other perf changes in this package measured).
+func (p *Parser) ParseFastNearIcons(imgBytes []byte) (result *Result, err error) {
+	_, result, err = p.parse(imgBytes, false, nil, filterBoxesNearIcons)
 	return result, err
 }
 
@@ -184,7 +206,7 @@ func (p *Parser) ParseFast(imgBytes []byte) (result *Result, err error) {
 // separate icon-only kickoff loop (see ParseIconsOnly) rather than relying
 // on ParseStaged calls alone to keep the grid responsive pass-to-pass.
 func (p *Parser) ParseStaged(imgBytes []byte, onIcons func(icons []Icon)) (result *Result, err error) {
-	_, result, err = p.parse(imgBytes, false, onIcons)
+	_, result, err = p.parse(imgBytes, false, onIcons, nil)
 	return result, err
 }
 
@@ -255,7 +277,7 @@ func (p *Parser) runIconStage(original *rgbImage) ([]Icon, error) {
 	return icons, nil
 }
 
-func (p *Parser) parse(imgBytes []byte, drawMarked bool, onIcons func(icons []Icon)) (markedPNG []byte, result *Result, err error) {
+func (p *Parser) parse(imgBytes []byte, drawMarked bool, onIcons func(icons []Icon), textFilter func(icons []Icon, boxes []Box) []Box) (markedPNG []byte, result *Result, err error) {
 	t0 := time.Now()
 
 	tDecode := time.Now()
@@ -310,6 +332,12 @@ func (p *Parser) parse(imgBytes []byte, drawMarked bool, onIcons func(icons []Ic
 	}
 	textBoxes := mergeOverlappingBoxes(allTextBoxes, 0.3)
 	debugf("dbnet: %d tiles, %v total (%v/tile avg) -> %d boxes after merge", len(tiles), time.Since(tDBNet), time.Since(tDBNet)/time.Duration(len(tiles)), len(textBoxes))
+
+	if textFilter != nil {
+		before := len(textBoxes)
+		textBoxes = textFilter(res.Icons, textBoxes)
+		debugf("text filter: %d -> %d boxes", before, len(textBoxes))
+	}
 
 	tSVTR := time.Now()
 	res.Text = p.batchRecognizeSVTR(original, textBoxes)

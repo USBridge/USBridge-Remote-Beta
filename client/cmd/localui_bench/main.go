@@ -27,6 +27,7 @@ func main() {
 	runs := flag.Int("runs", 1, "call Parse this many times on the same image, printing timing for each -- the first run pays one-time ONNX Runtime/OpenVINO graph-compile costs that later calls don't")
 	fast := flag.Bool("fast", false, "call ParseFast instead of Parse -- skips drawing+encoding the annotated PNG, matching the ai_vision.go live-overlay hot path (no .localui_marked.png is written)")
 	staged := flag.Bool("staged", false, "call ParseStaged instead of Parse/ParseFast -- prints when the icon-only onIcons callback fires relative to the final (icons+OCR) result, matching the ai_vision.go live-overlay hot path")
+	nearIcons := flag.Bool("near-icons", false, "call ParseFastNearIcons instead of Parse/ParseFast/ParseStaged -- only OCRs text boxes near a detected icon, matching ai_vision.go's OCR loop")
 	flag.Parse()
 
 	if flag.NArg() != 1 {
@@ -63,6 +64,8 @@ func main() {
 	for run := 1; run <= *runs; run++ {
 		t0 = time.Now()
 		switch {
+		case *nearIcons:
+			result, err = p.ParseFastNearIcons(imgBytes)
 		case *staged:
 			result, err = p.ParseStaged(imgBytes, func(icons []localui.Icon) {
 				fmt.Printf("  onIcons fired at %v: %d icons\n", time.Since(t0), len(icons))

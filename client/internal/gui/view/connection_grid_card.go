@@ -617,6 +617,12 @@ func newConnectionCardFieldEntry(value, placeholder string) *widget.Entry {
 	return entry
 }
 
+// gridCardFieldActionIconColor tints the copy/paste glyphs themselves --
+// the same pale brand yellow-green design.ColorConnectionsSectionIcon uses
+// elsewhere, baked into the inline SVGs below rather than left at
+// theme.ContentCopyIcon()/ContentPasteIcon()'s own default tint.
+const gridCardFieldActionIconColor = "#e9fdbb"
+
 // newGridCardFieldActions is the copy/paste icon pair for one editable
 // field (LAN/TS/Token) -- the same affordance the modal editor's
 // fieldActions gives each field (connection_manager_dialogs.go), just a
@@ -625,13 +631,20 @@ func newConnectionCardFieldEntry(value, placeholder string) *widget.Entry {
 // pasteClipboardInto -- see connection_grid_card_paste_default.go and
 // connection_grid_card_paste_wasm.go.
 func newGridCardFieldActions(entry *widget.Entry) fyne.CanvasObject {
+	copyIcon := fyne.NewStaticResource("connection-field-copy.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="`+gridCardFieldActionIconColor+`"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>`))
+	pasteIcon := fyne.NewStaticResource("connection-field-paste.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="`+gridCardFieldActionIconColor+`"><path d="M19 2h-4.18C14.4.84 13.3 0 12 0c-1.3 0-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm7 18H5V4h2v3h10V4h2v16z"/></svg>`))
+
+	// CornerRadius is small on purpose -- the default (design.RadiusMD, 8)
+	// on a button this size reads as a circle; this keeps a soft-cornered
+	// square instead.
 	copyBtn := newIconChromeButton(iconChromeButtonSpec{
-		NormalFill: color.Transparent,
-		HoverFill:  design.ColorSurfaceLight,
-		Stroke:     color.Transparent,
-		NormalIcon: theme.ContentCopyIcon(),
-		IconSize:   fyne.NewSize(11, 11),
-		ButtonSize: fyne.NewSize(18, 18),
+		NormalFill:   color.Transparent,
+		HoverFill:    design.ColorSurfaceLight,
+		Stroke:       color.Transparent,
+		CornerRadius: 3,
+		NormalIcon:   copyIcon,
+		IconSize:     fyne.NewSize(9, 9),
+		ButtonSize:   fyne.NewSize(15, 15),
 		OnTapped: func() {
 			if entry == nil || entry.Text == "" {
 				return
@@ -640,17 +653,18 @@ func newGridCardFieldActions(entry *widget.Entry) fyne.CanvasObject {
 		},
 	})
 	pasteBtn := newIconChromeButton(iconChromeButtonSpec{
-		NormalFill: color.Transparent,
-		HoverFill:  design.ColorSurfaceLight,
-		Stroke:     color.Transparent,
-		NormalIcon: theme.ContentPasteIcon(),
-		IconSize:   fyne.NewSize(11, 11),
-		ButtonSize: fyne.NewSize(18, 18),
+		NormalFill:   color.Transparent,
+		HoverFill:    design.ColorSurfaceLight,
+		Stroke:       color.Transparent,
+		CornerRadius: 3,
+		NormalIcon:   pasteIcon,
+		IconSize:     fyne.NewSize(9, 9),
+		ButtonSize:   fyne.NewSize(15, 15),
 		OnTapped: func() {
 			pasteClipboardIntoEntry(entry)
 		},
 	})
-	return container.New(&DeviceRowControlsLayout{Gap: 2}, copyBtn, pasteBtn)
+	return container.New(&DeviceRowControlsLayout{Gap: 0}, copyBtn, pasteBtn)
 }
 
 // newConnectionStatEditRow mirrors newConnectionStatRow's [label | value]
@@ -671,13 +685,19 @@ func newConnectionStatEditRow(label string, entry *widget.Entry, textSize float3
 
 	var leftColumn fyne.CanvasObject
 	if stackedActions {
-		leftColumn = container.NewVBox(labelText, actions)
+		// Nudged a couple px left of the label -- an iconChromeButton draws
+		// its icon centered inside its own box, so the visible glyph sits a
+		// little right of the box's true left edge; VBox alone left-aligns
+		// the boxes themselves and reads as slightly off from the label
+		// above them.
+		nudgedActions := container.New(&leftNudgeLayout{Amount: 2}, actions)
+		leftColumn = container.NewVBox(labelText, nudgedActions)
 	} else {
 		leftColumn = container.New(&DeviceRowControlsLayout{Gap: 4}, actions, labelText)
 	}
 
 	// Use a fixed width for the input and push it to the right so it looks aligned
-	wrapped := container.New(&rightAlignedInputLayout{Width: 160}, wrapGridCardEntry(entry, textSize, textColor))
+	wrapped := container.New(&rightAlignedInputLayout{Width: 122}, wrapGridCardEntry(entry, textSize, textColor))
 	return container.NewBorder(nil, nil, NewInset(leftColumn, 0, 8, 0, 0), nil, wrapped)
 }
 
@@ -845,7 +865,45 @@ func (l *rightAlignedInputLayout) Layout(objects []fyne.CanvasObject, size fyne.
 	if len(objects) == 0 {
 		return
 	}
-	objects[0].Resize(fyne.NewSize(l.Width, size.Height))
-	// Push to the right
-	objects[0].Move(fyne.NewPos(size.Width-l.Width, 0))
+	// Clamp to whatever room actually got left after the label/actions
+	// column and the nested Border layouts' own padding -- l.Width is a
+	// target, not a guarantee. Without this, a squeeze (e.g. from the
+	// copy/paste icons added next to the label) pushes x negative and the
+	// entry slides left, out over the label -- that overlap is exactly
+	// what shrinking Width here is meant to fix, but the clamp keeps it
+	// fixed even if the row gets tighter again later.
+	w := l.Width
+	if w > size.Width {
+		w = size.Width
+	}
+	x := size.Width - w
+	if x < 0 {
+		x = 0
+	}
+	objects[0].Resize(fyne.NewSize(w, size.Height))
+	objects[0].Move(fyne.NewPos(x, 0))
+}
+
+// leftNudgeLayout renders its one child at its own MinSize, shifted Amount
+// px left of where it'd otherwise sit -- purely cosmetic (see
+// newConnectionStatEditRow's Token/stackedActions case); the reported
+// MinSize is unchanged, so it doesn't affect the parent's own layout.
+type leftNudgeLayout struct {
+	Amount float32
+}
+
+func (l *leftNudgeLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	if len(objects) == 0 {
+		return fyne.NewSize(0, 0)
+	}
+	return objects[0].MinSize()
+}
+
+func (l *leftNudgeLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	if len(objects) == 0 {
+		return
+	}
+	childSize := objects[0].MinSize()
+	objects[0].Resize(childSize)
+	objects[0].Move(fyne.NewPos(-l.Amount, 0))
 }

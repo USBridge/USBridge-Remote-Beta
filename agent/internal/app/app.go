@@ -1766,15 +1766,37 @@ func (a *App) checkRustShineUpdate(ctx context.Context, entitlementToken string)
 	if !needsUpdate {
 		return
 	}
+	// Same reentrancy guard as CheckRustShineUpdateNow (see its doc comment)
+	// -- this silent background tick and a manual "check for updates" click
+	// share the same StageRustShine/stopRustShineForUpdate sequence and can
+	// otherwise race each other just as easily as two clicks can.
+	a.entMu.Lock()
+	if a.entStatus.RustShineUpdateInProgress {
+		a.entMu.Unlock()
+		return
+	}
+	a.entStatus.RustShineUpdateInProgress = true
+	a.entMu.Unlock()
+	defer func() {
+		a.entMu.Lock()
+		a.entStatus.RustShineUpdateInProgress = false
+		a.entMu.Unlock()
+	}()
+
 	log.Printf("[app] rustshine update available (%s) — downloading", version)
+	stopped := a.stopRustShineForUpdate()
 	if err := entitlement.StageRustShine(ctx, a.cfg.StateDir, entitlementToken, nil); err != nil {
-		// Most likely cause if this ever fires: RustShine is the active
-		// backend and currently running, and the platform won't let its
-		// binary be replaced out from under it (Windows in particular
-		// locks a running .exe against rename). Non-fatal -- retried at
-		// the next watchdog interval, and will succeed once RustShine
-		// isn't actively streaming.
+		// On Windows this shouldn't fire anymore now that
+		// stopRustShineForUpdate releases the file lock first -- if it
+		// still does (AV scan holding the file, some other locker), it's
+		// non-fatal: retried at the next watchdog interval. Relaunch
+		// immediately (on the still-old binary) if we stopped an actively
+		// streaming backend for this attempt, rather than leaving the user
+		// without video until the next 15s watchdog tick.
 		log.Printf("[app] rustshine auto-update to %s failed (will retry next interval): %v", version, err)
+		if stopped {
+			a.startSunshine()
+		}
 		return
 	}
 	log.Printf("[app] rustshine updated to %s", version)
@@ -1782,6 +1804,36 @@ func (a *App) checkRustShineUpdate(ctx context.Context, entitlementToken string)
 	a.entStatus.RustShineStaged = a.rustshineStaged()
 	a.entMu.Unlock()
 	a.restartRustShineIfActive()
+}
+
+// stopRustShineForUpdate stops the active RustShine process before an
+// update is staged, so entitlement.StageRustShine's os.Rename over the
+// binary doesn't race a running process for the file. Only Windows actually
+// needs this -- it locks a running .exe's image against rename/replace,
+// while POSIX (Linux/macOS) allows renaming over an open file just fine, so
+// staging there already hot-swaps cleanly without interrupting anything.
+// Confirmed live as a real, self-perpetuating failure mode on Windows: a
+// gamestream-server build that crashes instantly on every launch (e.g. a
+// staged binary that predates a CLI flag the agent now always passes) keeps
+// the exe open/locked essentially 100% of the time between respawns, so the
+// very update that would fix the crash could never land either -- staging
+// kept failing every single watchdog interval, forever.
+//
+// Returns whether it actually stopped anything, so the caller knows whether
+// it's now responsible for relaunching (see both call sites).
+func (a *App) stopRustShineForUpdate() bool {
+	if runtime.GOOS != "windows" {
+		return false
+	}
+	if a.currentStreamKind() != "rustshine" || a.stream == nil {
+		return false
+	}
+	log.Printf("[app] stopping rustshine before staging update (Windows can't replace a running .exe)")
+	_ = a.stream.Stop()
+	// Stop() only signals termination; give the OS a moment to actually
+	// release the exe's image-section file lock before the upcoming rename.
+	time.Sleep(500 * time.Millisecond)
+	return true
 }
 
 // restartRustShineIfActive re-execs the running RustShine subprocess (via
@@ -1842,7 +1894,19 @@ func (a *App) CheckRustShineUpdateNow() error {
 		return fmt.Errorf("not currently entitled: no entitlement token")
 	}
 
+	// Guard against two update attempts racing each other (a double-click on
+	// this button, or overlapping with the silent background watchdog's own
+	// checkRustShineUpdate tick). Confirmed live as a real failure mode: two
+	// concurrent StageRustShine calls each stop/restart the process out from
+	// under the other, so both "Access is denied" rename attempts land in
+	// whatever brief window the other one's restart leaves open, and neither
+	// ever succeeds. RustShineUpdateInProgress already existed for the UI to
+	// show a spinner; it doubles as that lock here.
 	a.entMu.Lock()
+	if a.entStatus.RustShineUpdateInProgress {
+		a.entMu.Unlock()
+		return fmt.Errorf("rustshine update already in progress")
+	}
 	a.entStatus.RustShineUpdateInProgress = true
 	a.entStatus.LastError = ""
 	a.entMu.Unlock()
@@ -1864,8 +1928,12 @@ func (a *App) CheckRustShineUpdateNow() error {
 	}
 
 	log.Printf("[app] rustshine update available (%s) — downloading (manual check)", version)
+	stopped := a.stopRustShineForUpdate()
 	if err := entitlement.StageRustShine(ctx, a.cfg.StateDir, token, nil); err != nil {
 		a.setEntError(fmt.Sprintf("update failed: %v", err))
+		if stopped {
+			a.startSunshine()
+		}
 		return err
 	}
 	log.Printf("[app] rustshine updated to %s", version)

@@ -9,6 +9,7 @@ package streamhost
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"log"
 	"net"
@@ -664,9 +665,23 @@ func (b *sunshineBackend) WaitReady(adminPort int, deadline time.Duration) bool 
 func adminHost() string { return "127.0.0.1" }
 
 // ensureSunshineStateFile creates sunshine_state.json with a valid template
-// if it does not already exist. On Windows the portable Sunshine build will
-// not create this file itself — --creds only updates it, so the file must
-// pre-exist or credential bootstrap silently fails.
+// if it does not already exist, or if the existing file is corrupt (fails to
+// parse as a JSON object). On Windows the portable Sunshine build will not
+// create this file itself — --creds only *updates* an existing one, so the
+// file must pre-exist with valid JSON or credential bootstrap silently
+// no-ops: confirmed live on a machine where this file had somehow been
+// zeroed out (265 bytes, all NUL -- exact cause unconfirmed, but plausibly
+// an interrupted write from a prior crash/AV scan) -- every subsequent
+// --creds run reported success (exit 0, activeAdminPassword and
+// usbridge_admin_pass both updated) while sunshine_state.json's mtime never
+// moved, because Sunshine's --creds merges into the existing file rather
+// than overwriting it wholesale and silently gives up when that file isn't
+// parseable JSON. The result: Sunshine's real on-disk username/password
+// never changed, every admin API call (including the PIN pairing relay)
+// failed Basic Auth ("Web UI: [127.0.0.1] -- not authorized" in Sunshine's
+// own log) forever after, and the Moonlight client fell back to showing the
+// PIN on-screen for manual entry instead of auto-pairing. A stat-only
+// existence check can never catch or heal this -- validate the content too.
 //
 // uniqueid must be a non-empty UUID: Sunshine treats an empty uniqueid as
 // "first run" and regenerates the entire file on startup, wiping any
@@ -676,8 +691,19 @@ func (b *sunshineBackend) ensureSunshineStateFile() error {
 	if stateFile == "" {
 		return nil
 	}
-	if _, err := os.Stat(stateFile); err == nil {
-		return nil // already exists
+	if data, err := os.ReadFile(stateFile); err == nil {
+		var probe map[string]any
+		if json.Unmarshal(data, &probe) == nil && len(probe) > 0 {
+			return nil // already exists and is valid JSON
+		}
+		// Corrupt: back up for forensics (best-effort) before overwriting so
+		// a fresh template can replace it below.
+		backup := stateFile + ".corrupt-" + strconv.FormatInt(time.Now().Unix(), 10)
+		if err := os.Rename(stateFile, backup); err != nil {
+			log.Printf("[sunshine] warning: could not back up corrupt %s to %s: %v", stateFile, backup, err)
+		} else {
+			log.Printf("[sunshine] %s was corrupt (invalid JSON) -- backed up to %s and regenerating", stateFile, backup)
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(stateFile), 0o755); err != nil {
 		return err

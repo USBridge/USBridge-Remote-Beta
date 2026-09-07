@@ -176,6 +176,11 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("/api/devices", sec.LimitPolling(s.devicesLegacy))
 	mux.HandleFunc("/api/pcpanel/leds", sec.LimitPolling(s.leds))
 	mux.HandleFunc("/api/pcpanel/button", sec.LimitPolling(s.button))
+	// MCP (Model Context Protocol): JSON-RPC 2.0 over this one POST endpoint,
+	// same shape and auth as the hardware KVM's own /api/mcp (see mcp.go) --
+	// the client's MCP proxy (client/internal/api/mcp_proxy.go) forwards to
+	// whichever of the two it's paired with without needing to know which.
+	mux.HandleFunc("/api/mcp", sec.LimitPolling(s.mcp))
 
 	return s.withCORS(s.withLogging(s.withRecovery(mux)))
 }
@@ -503,32 +508,10 @@ func (s *Server) keyboard(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("[api] keyboard action=%s", req.Action)
 
-	var err error
-	switch req.Action {
-	case "key":
-		if req.KeyCode == nil {
-			s.fail(w, http.StatusBadRequest, "missing_key_code", nil)
-			return
-		}
-		err = s.app.Input().Key(*req.KeyCode)
-	case "combo":
-		if req.KeyCode == nil || req.Modifiers == nil {
-			s.fail(w, http.StatusBadRequest, "missing_combo_fields", nil)
-			return
-		}
-		err = s.app.Input().Combo(*req.Modifiers, *req.KeyCode)
-	case "text":
-		if req.Text == nil {
-			s.fail(w, http.StatusBadRequest, "missing_text", nil)
-			return
-		}
-		err = s.app.Input().Text(*req.Text)
-	default:
-		s.fail(w, http.StatusBadRequest, "unsupported_action", nil)
+	if badReq, err := s.applyKeyboard(req); badReq != "" {
+		s.fail(w, http.StatusBadRequest, badReq, nil)
 		return
-	}
-
-	if err != nil {
+	} else if err != nil {
 		log.Printf("[api] keyboard failed: %v", err)
 		s.fail(w, http.StatusInternalServerError, "keyboard_failed", err)
 		return
@@ -623,6 +606,34 @@ func (s *Server) mouseWS(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		_ = safeWriteJSON(APIResponse{Success: true, Message: "ok", Data: MouseResponseData{}})
+	}
+}
+
+// applyKeyboard dispatches a decoded KeyboardRequest against s.app.Input(),
+// shared by the /api/keyboard HTTP handler and the MCP keyboard.send tool
+// (see mcp.go) so the two don't drift on validation. badReq is a non-empty
+// APIResponse.Error code when the request itself was malformed (missing a
+// required field for its action, or an unrecognized action) -- distinct
+// from err, which is a real Input() failure at the OS level.
+func (s *Server) applyKeyboard(req KeyboardRequest) (badReq string, err error) {
+	switch req.Action {
+	case "key":
+		if req.KeyCode == nil {
+			return "missing_key_code", nil
+		}
+		return "", s.app.Input().Key(*req.KeyCode)
+	case "combo":
+		if req.KeyCode == nil || req.Modifiers == nil {
+			return "missing_combo_fields", nil
+		}
+		return "", s.app.Input().Combo(*req.Modifiers, *req.KeyCode)
+	case "text":
+		if req.Text == nil {
+			return "missing_text", nil
+		}
+		return "", s.app.Input().Text(*req.Text)
+	default:
+		return "unsupported_action", nil
 	}
 }
 

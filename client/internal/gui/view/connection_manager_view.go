@@ -54,8 +54,10 @@ type ConnectionManagerUI struct {
 
 	// editPanel, when non-nil, switches List mode into its split-edit
 	// layout (NewConnectionsListSplit) instead of the plain table
-	// (NewConnectionsListTable) -- see SetRows.
+	// (NewConnectionsListTable) -- see SetRows. editIndex is the lastRows
+	// index it belongs to, meaningful only while editPanel != nil.
 	editPanel fyne.CanvasObject
+	editIndex int
 }
 
 type ConnectionRowData struct {
@@ -105,6 +107,10 @@ type ConnectionRowActions struct {
 	OnEdit           func()
 	OnProtocolChange func(string)
 	OnRegisterChange func(bool)
+	// OnDelete removes this connection -- List's ACTIONS column Delete
+	// icon button (next to Connect), same confirm-then-delete flow the
+	// split-edit panel's own Delete button uses.
+	OnDelete func()
 }
 
 const (
@@ -394,7 +400,7 @@ func (ui *ConnectionManagerUI) applyConnectionsContent() {
 		// connection -- see connection_list_table.go. editPanel switches to
 		// the split edit layout instead (NewConnectionsListSplit).
 		if ui.editPanel != nil {
-			ui.ConnectionsBox.Add(NewConnectionsListSplit(ui.lastRows, ui.editPanel))
+			ui.ConnectionsBox.Add(NewConnectionsListSplit(ui.lastRows, ui.editIndex, ui.editPanel))
 		} else {
 			ui.ConnectionsBox.Add(NewConnectionsListTable(ui.lastRows))
 		}
@@ -660,13 +666,15 @@ func (l *emptyStatePromoTitleLayout) MinSize(objects []fyne.CanvasObject) fyne.S
 // in grid mode yet.
 // editPanel is non-nil while List is in its split-edit layout (see
 // NewConnectionsListSplit/ConnectionManagerUI.editPanel) -- nil the rest of
-// the time.
-func (ui *ConnectionManagerUI) SetRows(rows []ConnectionListItem, cards []fyne.CanvasObject, summary ConnectionsSummary, editPanel fyne.CanvasObject) {
+// the time; editIndex is the rows index it belongs to, meaningful only
+// alongside a non-nil editPanel.
+func (ui *ConnectionManagerUI) SetRows(rows []ConnectionListItem, cards []fyne.CanvasObject, summary ConnectionsSummary, editIndex int, editPanel fyne.CanvasObject) {
 	ui.lastRows = rows
 	ui.lastCards = cards
 	ui.lastSummary = summary
 	ui.hasRows = true
 	ui.editPanel = editPanel
+	ui.editIndex = editIndex
 	ui.applyConnectionsContent()
 
 	header, buttons := newConnectionsHeader(summary, ui.headerActions, ui.viewMode)

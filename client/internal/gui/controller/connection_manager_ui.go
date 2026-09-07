@@ -132,11 +132,13 @@ func (cm *ConnectionManager) refreshConnectionsList() {
 		remoteOSValues = append(remoteOSValues, conn.RemoteOS)
 	}
 
+	editIndex := -1
 	var editPanel fyne.CanvasObject
 	if cm.editingListIndex >= 0 && cm.editingListIndex < len(cm.connections) {
+		editIndex = cm.editingListIndex
 		editPanel = cm.buildListEditPanel(cm.editingListIndex)
 	}
-	cm.ui.SetRows(rows, cards, view.SummarizeConnections(remoteOSValues), editPanel)
+	cm.ui.SetRows(rows, cards, view.SummarizeConnections(remoteOSValues), editIndex, editPanel)
 	cm.notifyConnectionsState()
 }
 
@@ -211,6 +213,9 @@ func (cm *ConnectionManager) createConnectionRow(conn SavedConnection, idx int) 
 				fyne.Do(func() {
 					cm.refreshConnectionsList()
 				})
+			},
+			OnDelete: func() {
+				cm.handleDeleteConnection(idx, nil)
 			},
 			OnProtocolChange: func(label string) {
 				if cm.connectionPending {

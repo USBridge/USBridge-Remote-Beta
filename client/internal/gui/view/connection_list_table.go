@@ -14,11 +14,16 @@ package view
 //
 // The edit pencil no longer opens the modal editor as an overlay -- it
 // switches the whole List view into a split layout (NewConnectionsListSplit):
-// the table (NETWORK/ACTIONS columns dropped, see buildConnectionsListTable)
-// docked left, the modal editor's own fields docked right in a plain panel
-// the controller builds (connection_manager_list_edit.go, since this
-// package can't import controller). "X" or Save/Delete on that panel exits
-// back to the normal full table.
+// the table -- NETWORK, ROUTE BRIDGE and ACTIONS columns dropped, see
+// buildConnectionsListTable's compact mode -- docked left, the edit panel
+// (view.NewConnectionEditPanel, built by the controller) docked right.
+// Unlike a plain HSplit, the panel doesn't stretch to the table's height --
+// connectionsListSplitLayout pins it at a fixed height, positioned next to
+// whichever row is being edited (so a long, scrolled table still opens the
+// panel near that row instead of at the top). That row also gets a
+// rounded teal outline (newConnectionListRow's highlighted flag) so it's
+// obvious which one the panel belongs to. "X" or Save/Delete on the panel
+// exits back to the normal full table.
 
 import (
 	"image/color"
@@ -46,42 +51,60 @@ type ConnectionListItem struct {
 // newConnectionListHeaderRow/newConnectionListRow build cells in. 0 means
 // "flexible, absorb whatever room the fixed columns and gaps leave" -- only
 // NETWORK does. connectionListCompactColumn{Labels,Widths} is the same
-// table with NETWORK and ACTIONS dropped -- used while a row is being
-// edited (see NewConnectionsListSplit): there's no room for them once the
-// table is squeezed into half the width, and Connect/the addresses aren't
-// relevant while editing anyway. Header and data rows always share
+// table with NETWORK, ROUTE BRIDGE and ACTIONS dropped -- used while a row
+// is being edited (see NewConnectionsListSplit): none of the three are
+// relevant while editing (the connection method and Connect/Delete belong
+// to the un-edited state), and there's no room for them once the table is
+// squeezed into half the width besides. Header and data rows always share
 // whichever pair is active (via connectionsTableRowLayout) so columns line
 // up.
 var (
 	connectionListColumnLabels = []string{"OS", "NAME", "STATE", "NETWORK", "ROUTE BRIDGE", "ACTIONS"}
-	connectionListColumnWidths = []float32{32, 130, 70, 0, 100, 116}
+	connectionListColumnWidths = []float32{32, 130, 70, 0, 100, 150}
 
-	connectionListCompactColumnLabels = []string{"OS", "NAME", "STATE", "ROUTE BRIDGE"}
-	connectionListCompactColumnWidths = []float32{32, 0, 70, 100}
+	connectionListCompactColumnLabels = []string{"OS", "NAME", "STATE"}
+	connectionListCompactColumnWidths = []float32{32, 0, 70}
 )
 
 const connectionListColumnGap float32 = 16
+
+// connectionListSplitGap is the horizontal gap between the compact table
+// and the edit panel in NewConnectionsListSplit.
+const connectionListSplitGap float32 = 16
 
 // NewConnectionsListTable builds the whole List-mode table as one
 // CanvasObject: a header row of column titles, then one row per item,
 // separated by hairline dividers, all inside a single card.
 func NewConnectionsListTable(items []ConnectionListItem) fyne.CanvasObject {
-	return buildConnectionsListTable(items, false)
+	table, _, _ := buildConnectionsListTable(items, false, -1)
+	return table
 }
 
 // NewConnectionsListSplit is List's edit-mode layout: the table with its
-// NETWORK/ACTIONS columns dropped (buildConnectionsListTable's compact
-// mode) docked to the left half of a draggable HSplit, editPanel -- built
-// by the controller from the modal editor's own field constructors, since
-// this package can't import controller -- docked to the right half.
-func NewConnectionsListSplit(items []ConnectionListItem, editPanel fyne.CanvasObject) fyne.CanvasObject {
-	table := buildConnectionsListTable(items, true)
-	split := container.NewHSplit(table, editPanel)
-	split.Offset = 0.5
-	return split
+// NETWORK/ROUTE BRIDGE/ACTIONS columns dropped (buildConnectionsListTable's
+// compact mode, editIndex's row also getting a teal highlight outline)
+// docked to the left half, editPanel -- built by the controller, since this
+// package can't import controller -- pinned next to that row at its own
+// fixed height (connectionsListSplitLayout) rather than stretched to match
+// the table, so it opens near the row being edited instead of always at the
+// top or spanning the whole table's height.
+func NewConnectionsListSplit(items []ConnectionListItem, editIndex int, editPanel fyne.CanvasObject) fyne.CanvasObject {
+	table, rowY, rowHeight := buildConnectionsListTable(items, true, editIndex)
+	return container.New(&connectionsListSplitLayout{
+		editRowY:      rowY,
+		editRowHeight: rowHeight,
+		gap:           connectionListSplitGap,
+	}, table, editPanel)
 }
 
-func buildConnectionsListTable(items []ConnectionListItem, compact bool) fyne.CanvasObject {
+// buildConnectionsListTable builds the table itself. highlightIndex, when
+// >= 0, both gets that item's row a teal outline (newConnectionListRow's
+// highlighted flag) and makes this return that row's Y offset/height
+// within the returned table object (0/0 otherwise) -- computed from the
+// same real MinSize() calls tightStatsVBoxLayout's own Layout will use to
+// actually stack these rows, so it lands exactly where the row ends up
+// once rendered, not just an estimate.
+func buildConnectionsListTable(items []ConnectionListItem, compact bool, highlightIndex int) (table fyne.CanvasObject, highlightY, highlightHeight float32) {
 	labels, widths := connectionListColumnLabels, connectionListColumnWidths
 	if compact {
 		labels, widths = connectionListCompactColumnLabels, connectionListCompactColumnWidths
@@ -94,9 +117,24 @@ func buildConnectionsListTable(items []ConnectionListItem, compact bool) fyne.Ca
 		return NewInset(sep, 0, 0, 2, 2)
 	}
 
-	children := []fyne.CanvasObject{newConnectionListHeaderRow(labels, widths)}
-	for _, item := range items {
-		children = append(children, newDivider(), newConnectionListRow(item, widths, compact))
+	header := newConnectionListHeaderRow(labels, widths)
+	children := []fyne.CanvasObject{header}
+	y := header.MinSize().Height
+
+	for i, item := range items {
+		div := newDivider()
+		row := newConnectionListRow(item, widths, compact, i == highlightIndex)
+		divHeight := div.MinSize().Height
+		rowHeightVal := row.MinSize().Height
+		if i == highlightIndex {
+			// +12 for the outer NewInset's own top padding below -- this
+			// offset needs to be relative to the whole `table` object's
+			// bounds, not just the inner rowsCol's.
+			highlightY = y + divHeight + 12
+			highlightHeight = rowHeightVal
+		}
+		children = append(children, div, row)
+		y += divHeight + rowHeightVal
 	}
 	rowsCol := container.New(&tightStatsVBoxLayout{Gap: 0}, children...)
 
@@ -105,7 +143,8 @@ func buildConnectionsListTable(items []ConnectionListItem, compact bool) fyne.Ca
 	bg.StrokeColor = design.ColorTailscaleChipBorder
 	bg.StrokeWidth = 1
 
-	return container.NewStack(bg, NewInset(rowsCol, 16, 16, 12, 12))
+	table = container.NewStack(bg, NewInset(rowsCol, 16, 16, 12, 12))
+	return table, highlightY, highlightHeight
 }
 
 func newConnectionListHeaderRow(labels []string, widths []float32) fyne.CanvasObject {
@@ -127,25 +166,37 @@ func newConnectionListHeaderRow(labels []string, widths []float32) fyne.CanvasOb
 	return container.New(&connectionsTableRowLayout{Widths: widths, Gap: connectionListColumnGap}, cells...)
 }
 
-func newConnectionListRow(item ConnectionListItem, widths []float32, compact bool) fyne.CanvasObject {
+// newConnectionListRow builds one data row. highlighted wraps it in a
+// rounded teal outline spanning every column (the split-edit layout's way
+// of showing which row editPanel belongs to -- see
+// NewConnectionsListSplit/buildConnectionsListTable); false for every row
+// everywhere else.
+func newConnectionListRow(item ConnectionListItem, widths []float32, compact bool, highlighted bool) fyne.CanvasObject {
 	data := item.Data
 	isAgent, isKVM := ClassifyConnectionRemoteOS(data.RemoteOS)
 
 	osCell := container.NewCenter(newConnectionCardStatusIndicator(data.RemoteOS))
 	nameCell := newConnectionListNameCell(data, item.Actions.OnEdit, isAgent, isKVM)
 	stateCell := container.NewCenter(newConnectionListStateCell(isAgent, isKVM))
-	routeCell := container.NewBorder(nil, nil, nil, newConnectionListRouteCell(data, item.Actions.OnProtocolChange, item.State))
 
 	cells := []fyne.CanvasObject{osCell, nameCell, stateCell}
-	if compact {
-		cells = append(cells, routeCell)
-	} else {
+	if !compact {
 		networkCell := newConnectionListNetworkCell(data.LANAddress, data.TailscaleAddress)
+		routeCell := container.NewBorder(nil, nil, nil, newConnectionListRouteCell(data, item.Actions.OnProtocolChange, item.State))
 		actionsCell := container.NewBorder(nil, nil, nil, newConnectionListActionsCell(item))
 		cells = append(cells, networkCell, routeCell, actionsCell)
 	}
 
-	return container.New(&connectionsTableRowLayout{Widths: widths, Gap: connectionListColumnGap}, cells...)
+	row := container.New(&connectionsTableRowLayout{Widths: widths, Gap: connectionListColumnGap}, cells...)
+	if !highlighted {
+		return row
+	}
+
+	highlightBorder := canvas.NewRectangle(color.Transparent)
+	highlightBorder.StrokeColor = design.ColorConnectionBadgeText
+	highlightBorder.StrokeWidth = 1
+	highlightBorder.CornerRadius = 8
+	return container.NewStack(highlightBorder, NewInset(row, 8, 8, 4, 4))
 }
 
 func newConnectionListNameCell(data ConnectionRowData, onEdit func(), isAgent, isKVM bool) fyne.CanvasObject {
@@ -266,7 +317,23 @@ func newConnectionListActionsCell(item ConnectionListItem) fyne.CanvasObject {
 	connectBtn.SetText("Connect")
 	connectBtn.SetDisabled(item.State.Disabled)
 	connectBtn.SetLoading(item.State.Loading)
-	return connectBtn
+
+	deleteIcon := fyne.NewStaticResource("connection-delete.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#c5c8b5"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>`))
+	deleteBtn := newIconChromeButton(iconChromeButtonSpec{
+		NormalFill:   color.Transparent,
+		HoverFill:    design.ColorSurfaceLight,
+		DisabledFill: connectionActionBlockedFill,
+		Stroke:       design.ColorTailscaleChipBorder,
+		StrokeWidth:  1,
+		CornerRadius: 6,
+		NormalIcon:   deleteIcon,
+		IconSize:     fyne.NewSize(11, 11),
+		ButtonSize:   fyne.NewSize(23, 23),
+		OnTapped:     item.Actions.OnDelete,
+	})
+	deleteBtn.SetDisabled(item.State.Disabled)
+
+	return container.New(&DeviceRowControlsLayout{Gap: 6}, deleteBtn, connectBtn)
 }
 
 // connectionsTableRowLayout lays out N columns left-to-right per Widths,
@@ -353,4 +420,66 @@ func (l *connectionsTableRowLayout) Layout(objects []fyne.CanvasObject, size fyn
 		obj.Resize(fyne.NewSize(w, objHeight))
 		x += w + l.Gap
 	}
+}
+
+// connectionsListSplitLayout is List's split-edit layout (see
+// NewConnectionsListSplit): the compact table docked left at half the
+// available width and its own natural (unstretched) height; the edit panel
+// pinned at editRowY -- the Y within the table the row being edited starts
+// at -- vertically centered on that row using its own fixed, natural
+// height (never stretched to match however tall the table happens to be).
+type connectionsListSplitLayout struct {
+	editRowY      float32
+	editRowHeight float32
+	gap           float32
+}
+
+func (l *connectionsListSplitLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	if len(objects) < 2 {
+		return fyne.NewSize(0, 0)
+	}
+	table := objects[0].MinSize()
+	panel := objects[1].MinSize()
+	height := table.Height
+	// The panel can stick out past the table's own bottom when the edited
+	// row is near the end of a short table -- make sure the container
+	// reports enough height to actually show all of it.
+	if panelBottom := l.editRowY + l.editRowHeight/2 + panel.Height/2; panelBottom > height {
+		height = panelBottom
+	}
+	return fyne.NewSize(table.Width+l.gap+panel.Width, height)
+}
+
+func (l *connectionsListSplitLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	if len(objects) < 2 {
+		return
+	}
+	table := objects[0]
+	panel := objects[1]
+
+	leftWidth := size.Width / 2
+	tableHeight := table.MinSize().Height
+	table.Move(fyne.NewPos(0, 0))
+	table.Resize(fyne.NewSize(leftWidth, tableHeight))
+
+	panelMin := panel.MinSize()
+	rightWidth := size.Width - leftWidth - l.gap
+	if rightWidth < panelMin.Width {
+		rightWidth = panelMin.Width
+	}
+
+	panelY := l.editRowY + l.editRowHeight/2 - panelMin.Height/2
+	if panelY < 0 {
+		panelY = 0
+	}
+	if maxY := tableHeight - panelMin.Height; maxY < 0 {
+		// Panel is taller than the whole table (e.g. one short connection
+		// list) -- just pin it to the top rather than a negative position.
+		panelY = 0
+	} else if panelY > maxY {
+		panelY = maxY
+	}
+
+	panel.Move(fyne.NewPos(leftWidth+l.gap, panelY))
+	panel.Resize(fyne.NewSize(rightWidth, panelMin.Height))
 }

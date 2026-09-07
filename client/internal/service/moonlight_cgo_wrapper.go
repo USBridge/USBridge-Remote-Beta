@@ -537,16 +537,17 @@ func goAIVisionOverlay(rgba *C.uint8_t, width, height, stride C.int) {
 	ApplyAIVisionOverlay(buf, w, h, s)
 }
 
-// goAIVisionShouldSample is a cheap (atomics + one time comparison, no
-// pixel access) pre-check called every frame from vt_callback's Metal
-// fast-path branch in moonlight_cgo_apple.go: it lets the C side skip the
-// BGRA→RGBA CVPixelBuffer readback entirely on the (overwhelming) majority
-// of frames where a fresh detection pass isn't due yet, so the zero-copy
-// path stays zero-copy except for the one frame every aiVisionInterval
-// that actually needs to feed the detector. Mirrors (but does not replace)
-// the authoritative gating inside maybeKickDetection's CompareAndSwap --
-// a false positive here just means one wasted conversion, never a
-// correctness issue.
+// goAIVisionShouldSample is a cheap (atomics + time comparisons, no pixel
+// access) pre-check called every frame from vt_callback's Metal fast-path
+// branch in moonlight_cgo_apple.go: it lets the C side skip the BGRA→RGBA
+// CVPixelBuffer readback entirely on the (overwhelming) majority of frames
+// where neither the icon nor the OCR loop is due yet (see ai_vision.go's
+// package doc comment for why there are two independent loops/cadences),
+// so the zero-copy path stays zero-copy except for the rare frame that
+// actually needs to feed one of them. Mirrors (but does not replace) the
+// authoritative gating inside maybeKickIconDetection/maybeKickOCR's own
+// CompareAndSwap -- a false positive here just means one wasted
+// conversion, never a correctness issue.
 //
 //export goAIVisionShouldSample
 func goAIVisionShouldSample() C.int {
@@ -556,24 +557,28 @@ func goAIVisionShouldSample() C.int {
 	if usbapi.LiveFrameWanted() {
 		return 1
 	}
-	if !aiVisionEnabled.Load() || aiVisionBusy.Load() {
+	if !aiVisionEnabled.Load() {
 		return 0
 	}
-	if time.Now().UnixNano()-aiVisionLastRun.Load() < int64(aiVisionInterval) {
-		return 0
+	now := time.Now().UnixNano()
+	iconDue := !aiVisionIconBusy.Load() && now-aiVisionIconLastRun.Load() >= int64(aiVisionIconInterval)
+	ocrDue := !aiVisionOCRBusy.Load() && now-aiVisionOCRLastRun.Load() >= int64(aiVisionOCRInterval)
+	if iconDue || ocrDue {
+		return 1
 	}
-	return 1
+	return 0
 }
 
 // goAIVisionSample is the macOS Metal fast-path counterpart to
 // goAIVisionOverlay: called only on the rare frame goAIVisionShouldSample
 // green-lit, with a CPU readback of that one frame converted to RGBA. It
-// only feeds the detector (maybeKickDetection) -- it must NOT draw into
-// buf, unlike goAIVisionOverlay's ApplyAIVisionOverlay, because this buffer
-// is a throwaway conversion scratch space, never the one actually
-// displayed (Metal renders the CVImageBufferRef's IOSurface directly). The
-// completed result reaches the screen via pushAIVisionOverlayToMetal's
-// separate compositor-layer path instead (see aiVisionMetalPush).
+// only feeds the detector (maybeKickIconDetection/maybeKickOCR) -- it must
+// NOT draw into buf, unlike goAIVisionOverlay's ApplyAIVisionOverlay,
+// because this buffer is a throwaway conversion scratch space, never the
+// one actually displayed (Metal renders the CVImageBufferRef's IOSurface
+// directly). The completed result reaches the screen via
+// pushAIVisionOverlayToMetal's separate compositor-layer path instead (see
+// aiVisionMetalPush).
 //
 //export goAIVisionSample
 func goAIVisionSample(rgba *C.uint8_t, width, height, stride C.int) {
@@ -586,7 +591,8 @@ func goAIVisionSample(rgba *C.uint8_t, width, height, stride C.int) {
 	if !aiVisionEnabled.Load() {
 		return
 	}
-	maybeKickDetection(buf, w, h, s)
+	maybeKickIconDetection(buf, w, h, s)
+	maybeKickOCR(buf, w, h, s)
 }
 
 var vtFrameCount int64

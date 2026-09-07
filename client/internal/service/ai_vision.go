@@ -25,26 +25,40 @@ import (
 //
 // It reuses internal/localui's client-side ONNX pipeline (the same one
 // backing the local ui.parse MCP offload, see internal/api/local_ui_init.go)
-// rather than shipping a second copy of the models. That pipeline runs in
-// the neighborhood of a second or more per frame -- nowhere close to video
-// frame rate -- so detection does NOT run every frame: aiVisionInterval
-// paces how often a fresh pass is kicked off, and every frame in between
-// keeps drawing the most recently completed result. Disabled, the whole
-// feature costs one atomic load per frame (see ApplyAIVisionOverlay).
-const aiVisionInterval = 2 * time.Second
+// rather than shipping a second copy of the models. The dbnet+svtr OCR
+// stage of that pipeline runs in the neighborhood of a second or more per
+// frame -- nowhere close to video frame rate -- but icon_detect alone is
+// cheap (CoreML: typically 100-300ms, see localui.NewParser's doc comment).
+// Detection therefore runs as two INDEPENDENT loops with their own cadence,
+// busy-flag, and Parser lock (see localui.Parser's doc comment on
+// iconMu/textMu): maybeKickIconDetection paces icon-only passes fast
+// (aiVisionIconInterval) and never waits on OCR; maybeKickOCR paces the
+// much slower full icons+text pass separately (aiVisionOCRInterval).
+// Before this split, one shared busy-flag meant ANY new pass -- icon
+// positions included -- queued up behind however long the previous pass's
+// OCR took, which is what made the visible grid noticeably lag behind the
+// actual screen even though icon_detect itself was fast. Disabled, the
+// whole feature costs one atomic load per frame (see ApplyAIVisionOverlay).
+const (
+	aiVisionIconInterval = 500 * time.Millisecond
+	aiVisionOCRInterval  = 2 * time.Second
+)
 
 var (
 	aiVisionEnabled atomic.Bool
-	aiVisionBusy    atomic.Bool
-	aiVisionLastRun atomic.Int64 // UnixNano of the last detection *kickoff*
+
+	aiVisionIconBusy    atomic.Bool
+	aiVisionIconLastRun atomic.Int64 // UnixNano of the last icon-only kickoff
+
+	aiVisionOCRBusy    atomic.Bool
+	aiVisionOCRLastRun atomic.Int64 // UnixNano of the last OCR-pass kickoff
 
 	// aiVisionLastDurationMs is the wall time the most recently *completed*
-	// Parse call took, in milliseconds -- 0 until the first one finishes.
-	// Feeds the detection-fps badge under the video icon (see
-	// DetectionFPS/main_window_layout.go's updateVideoIconLabel) with a
-	// real measured rate instead of the nominal 1/aiVisionInterval, since
-	// on a slow machine Parse can (and, per this feature's own doc comment
-	// above, routinely does) take longer than the pacing interval.
+	// icon-only pass took, in milliseconds -- 0 until the first one
+	// finishes. Feeds the detection-fps badge under the video icon (see
+	// DetectionFPS/main_window_layout.go's updateVideoIconLabel) with the
+	// real measured rate of what actually determines grid freshness now:
+	// the icon loop, not OCR.
 	aiVisionLastDurationMs atomic.Int64
 
 	aiVisionMu     sync.RWMutex
@@ -89,17 +103,14 @@ func AIVisionEnabled() bool {
 	return aiVisionEnabled.Load()
 }
 
-// DetectionFPS returns the measured rate of the icon_detect stage only
-// (1000/aiVisionLastDurationMs), or 0 if the overlay is off or no pass has
-// completed yet -- NOT the full Parse/OCR pipeline. Since maybeKickDetection
-// now uses ParseStaged (see its doc comment), aiVisionLastDurationMs is set
-// from ParseStaged's onIcons callback, i.e. right when icon boxes actually
-// hit the screen; the slower dbnet+svtr OCR stage that follows updates text
-// labels separately later and deliberately isn't counted here, since it's
-// not what determines how fresh the visible grid overlay is. This is the
-// *actual* throughput, not the nominal 1/aiVisionInterval pacing target.
-// Polled at 1Hz by main_window_layout.go's FPS-changed callback to drive
-// the small detection-fps badge under the video icon.
+// DetectionFPS returns the measured rate of the icon-only loop
+// (1000/aiVisionLastDurationMs, see maybeKickIconDetection), or 0 if the
+// overlay is off or no pass has completed yet -- NOT the OCR pipeline,
+// which runs independently and slower (see the package doc comment). This
+// is what actually determines how fresh the visible grid overlay is, and
+// the *actual* measured throughput, not the nominal 1/aiVisionIconInterval
+// pacing target. Polled at 1Hz by main_window_layout.go's FPS-changed
+// callback to drive the small detection-fps badge under the video icon.
 func DetectionFPS() float64 {
 	if !aiVisionEnabled.Load() {
 		return 0
@@ -130,7 +141,8 @@ func ApplyAIVisionOverlay(rgba []byte, w, h, stride int) {
 	if !aiVisionEnabled.Load() {
 		return
 	}
-	maybeKickDetection(rgba, w, h, stride)
+	maybeKickIconDetection(rgba, w, h, stride)
+	maybeKickOCR(rgba, w, h, stride)
 	drawCachedOverlay(rgba, w, h, stride)
 }
 
@@ -155,27 +167,27 @@ func maybeServeLiveFrame(rgba []byte, w, h, stride int) {
 	usbapi.SubmitLiveFrame(buf.Bytes())
 }
 
-// maybeKickDetection copies the current frame and hands it to the local
-// ui.parse detector on a background goroutine, at most once per
-// aiVisionInterval and never while a previous pass is still running (a
-// slow CPU can take longer than the interval -- in that case we simply
-// keep showing the last completed result instead of piling up goroutines
-// or falling behind on GPU-owned memory).
-func maybeKickDetection(rgba []byte, w, h, stride int) {
+// maybeKickIconDetection copies the current frame and runs icon_detect
+// ONLY (localui.Parser.ParseIconsOnly) on a background goroutine, at most
+// once per aiVisionIconInterval and never while a previous icon-only pass
+// is still running. Independent of maybeKickOCR below -- see the package
+// doc comment for why they're split -- so this proceeds on its own fast
+// cadence even while an OCR pass from an older frame is still grinding
+// away in its own goroutine.
+func maybeKickIconDetection(rgba []byte, w, h, stride int) {
 	now := time.Now().UnixNano()
-	if now-aiVisionLastRun.Load() < int64(aiVisionInterval) {
+	if now-aiVisionIconLastRun.Load() < int64(aiVisionIconInterval) {
 		return
 	}
-	if !aiVisionBusy.CompareAndSwap(false, true) {
+	if !aiVisionIconBusy.CompareAndSwap(false, true) {
 		return
 	}
-	aiVisionLastRun.Store(now)
+	aiVisionIconLastRun.Store(now)
 
 	parser := usbapi.GetLocalUIParser()
 	if parser == nil {
-		aiVisionBusy.Store(false)
-		logrus.Warn("🔎 [AI Vision] enabled but the local ui.parse models aren't loaded (Settings ▸ Local ui.parse offload) -- nothing to overlay yet")
-		return
+		aiVisionIconBusy.Store(false)
+		return // maybeKickOCR already warns once about missing models
 	}
 
 	// frame takes its own copy of the pixels: rgba is only valid for the
@@ -183,61 +195,106 @@ func maybeKickDetection(rgba []byte, w, h, stride int) {
 	frame := snapshotRGBA(rgba, w, h, stride)
 
 	go func() {
-		defer aiVisionBusy.Store(false)
+		defer aiVisionIconBusy.Store(false)
 		var buf bytes.Buffer
 		if err := png.Encode(&buf, frame); err != nil {
-			logrus.Warnf("🔎 [AI Vision] frame encode failed: %v", err)
+			logrus.Warnf("🔎 [AI Vision] icon frame encode failed: %v", err)
 			return
 		}
+		tIcon := time.Now()
+		icons, err := parser.ParseIconsOnly(buf.Bytes())
+		if err != nil {
+			logrus.Warnf("🔎 [AI Vision] icon detection failed: %v", err)
+			return
+		}
+		aiVisionLastDurationMs.Store(time.Since(tIcon).Milliseconds())
 		b := frame.Bounds()
-		tParse := time.Now()
-		result, err := parser.ParseStaged(buf.Bytes(), func(icons []localui.Icon) {
-			// Fires as soon as icon_detect is done -- typically a few
-			// hundred ms with CoreML -- well before the slower dbnet+svtr
-			// OCR stage below even starts. Publishing here is what makes
-			// the grid overlay (and the detection-fps badge) track
-			// icon_detect's own rate instead of getting held hostage by
-			// OCR. See ParseStaged's doc comment for what this does and
-			// does NOT fix (the next pass still waits for this one's OCR
-			// to finish -- Parser serializes calls behind one mutex).
-			aiVisionLastDurationMs.Store(time.Since(tParse).Milliseconds())
-			publishAIVisionResult(&localui.Result{Icons: icons, Text: cachedAIVisionText()}, b.Dx(), b.Dy())
-		})
+		publishAIVisionIcons(icons, b.Dx(), b.Dy())
+	}()
+}
+
+// maybeKickOCR copies the current frame and runs the full icons+text pass
+// (localui.Parser.ParseFast) on a background goroutine, at most once per
+// aiVisionOCRInterval and never while a previous OCR pass is still
+// running. Independent of maybeKickIconDetection above -- see the package
+// doc comment.
+func maybeKickOCR(rgba []byte, w, h, stride int) {
+	now := time.Now().UnixNano()
+	if now-aiVisionOCRLastRun.Load() < int64(aiVisionOCRInterval) {
+		return
+	}
+	if !aiVisionOCRBusy.CompareAndSwap(false, true) {
+		return
+	}
+	aiVisionOCRLastRun.Store(now)
+
+	parser := usbapi.GetLocalUIParser()
+	if parser == nil {
+		aiVisionOCRBusy.Store(false)
+		logrus.Warn("🔎 [AI Vision] enabled but the local ui.parse models aren't loaded (Settings ▸ Local ui.parse offload) -- nothing to overlay yet")
+		return
+	}
+
+	frame := snapshotRGBA(rgba, w, h, stride)
+
+	go func() {
+		defer aiVisionOCRBusy.Store(false)
+		var buf bytes.Buffer
+		if err := png.Encode(&buf, frame); err != nil {
+			logrus.Warnf("🔎 [AI Vision] OCR frame encode failed: %v", err)
+			return
+		}
+		result, err := parser.ParseFast(buf.Bytes())
 		if err != nil {
 			logrus.Warnf("🔎 [AI Vision] detection pass failed: %v", err)
 			return
 		}
-		publishAIVisionResult(result, b.Dx(), b.Dy())
+		b := frame.Bounds()
+		// Publish only the text: this pass's own icons came from whatever
+		// frame it started on, which by the time OCR finishes (multiple
+		// seconds later, see the package doc comment) is stale next to
+		// whatever the faster icon loop has already published since --
+		// overwriting fresher icon positions with this pass's would
+		// visibly snap boxes backward. result.Icons[i].Label
+		// (associateLabels ran against this pass's own icon snapshot) is
+		// discarded along with them -- an acceptable tradeoff; labels
+		// reappear next time the two loops' results happen to line up.
+		publishAIVisionText(result.Text, b.Dx(), b.Dy())
 	}()
 }
 
-// cachedAIVisionText returns whatever text the last *completed* detection
-// pass found, so the icon-only publish above doesn't blank out the text
-// overlay while this pass's own OCR is still running -- the old text stays
-// on screen (possibly for a stale frame's positions) until this pass's OCR
-// replaces it a few seconds later.
-func cachedAIVisionText() []localui.TextRegion {
-	aiVisionMu.RLock()
-	defer aiVisionMu.RUnlock()
-	if aiVisionResult == nil {
-		return nil
-	}
-	return aiVisionResult.Text
-}
-
-// publishAIVisionResult installs result as the cached overlay result and,
-// on macOS's Metal fast path, also pushes it to the native compositor
-// overlay layer (that path never runs drawCachedOverlay -- see
-// aiVisionMetalPush's doc comment above; push is a no-op nil check when
-// Metal isn't the active renderer). Called twice per detection pass now:
-// once from ParseStaged's onIcons callback (icons only, cached text), once
-// with the final, complete result once OCR finishes.
-func publishAIVisionResult(result *localui.Result, w, h int) {
+// publishAIVisionIcons merges fresh icons into the cached overlay result,
+// keeping whatever text is already cached (from the independent, slower
+// OCR loop) so the icon-only publish doesn't blank out text that's still
+// valid. See publishAIVisionText for the OCR loop's side of this.
+func publishAIVisionIcons(icons []localui.Icon, w, h int) {
 	aiVisionMu.Lock()
-	aiVisionResult = result
+	var text []localui.TextRegion
+	if aiVisionResult != nil {
+		text = aiVisionResult.Text
+	}
+	merged := &localui.Result{Icons: icons, Text: text}
+	aiVisionResult = merged
 	aiVisionMu.Unlock()
 	if push := aiVisionMetalPush; push != nil {
-		push(result, w, h)
+		push(merged, w, h)
+	}
+}
+
+// publishAIVisionText merges fresh text into the cached overlay result,
+// keeping whatever icons are already cached (see maybeKickOCR's doc
+// comment for why this pass's own icons are deliberately NOT used here).
+func publishAIVisionText(text []localui.TextRegion, w, h int) {
+	aiVisionMu.Lock()
+	var icons []localui.Icon
+	if aiVisionResult != nil {
+		icons = aiVisionResult.Icons
+	}
+	merged := &localui.Result{Icons: icons, Text: text}
+	aiVisionResult = merged
+	aiVisionMu.Unlock()
+	if push := aiVisionMetalPush; push != nil {
+		push(merged, w, h)
 	}
 }
 

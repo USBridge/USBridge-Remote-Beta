@@ -29,10 +29,22 @@ const iconInputSize = 640
 // ui_parser.Parser -- same three-model pipeline, same output JSON shape,
 // run locally instead of over the network+NPU. See package doc comment.
 type Parser struct {
-	mu    sync.Mutex
-	icon  *session
-	dbnet *session
-	svtr  *batchedSession
+	// iconMu and textMu are separate locks (not one Parser-wide mutex) so
+	// a fresh icon_detect call never has to wait behind a still-running
+	// dbnet+svtr OCR pass from an older frame -- see ParseIconsOnly's doc
+	// comment for why this matters. icon_detect and the dbnet+svtr chain
+	// are three independent ONNX Runtime sessions; ORT sessions support
+	// concurrent Run() calls, so nothing below actually requires they be
+	// serialized against each other, only against themselves (two
+	// concurrent icon_detect calls, or two concurrent OCR calls, would
+	// still race on the same session's input tensor -- see session.run).
+	iconMu sync.Mutex
+	icon   *session
+
+	textMu sync.Mutex
+	dbnet  *session
+	svtr   *batchedSession
+
 	dict  []string
 	gpu   bool   // whether the models actually ended up on a non-CPU EP (see acceleratorEP)
 	accel string // "coreml", "openvino", or "" -- see acceleratorEP
@@ -102,11 +114,14 @@ func NewParser(cfg Config) (*Parser, error) {
 }
 
 func (p *Parser) Close() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
+	p.iconMu.Lock()
 	p.icon.Close()
+	p.iconMu.Unlock()
+
+	p.textMu.Lock()
 	p.dbnet.Close()
 	p.svtr.Close()
+	p.textMu.Unlock()
 }
 
 // Parse runs the full local pipeline on a PNG-encoded screenshot (as
@@ -122,13 +137,12 @@ func (p *Parser) Parse(imgBytes []byte) (markedPNG []byte, result *Result, err e
 // drawResult (draw boxes + tags into a copy, then PNG-encode it) measured
 // ~1.2-1.3s of a ~13s Parse call on a 2880x1800 frame -- real cost, but
 // pure waste for a caller that only wants Result and never looks at the
-// image, which is exactly ai_vision.go's live-overlay detection pass (it
-// burns its own overlay directly into the live video frame via
-// drawCachedOverlay, using the same localui.DrawDetectionBox/Tag helpers
-// drawResult calls -- the annotated PNG Parse would have built is discarded
-// there today, see maybeKickDetection). MCP's ui.parse (local_ui_intercept.go)
-// keeps using plain Parse: its JSON-RPC result actually returns the
-// annotated image to the caller.
+// image. ai_vision.go's OCR loop (maybeKickOCR) uses this: it burns its
+// own overlay directly into the live video frame via drawCachedOverlay,
+// using the same localui.DrawDetectionBox/Tag helpers drawResult calls, so
+// the annotated PNG Parse would have built would just be discarded. MCP's
+// ui.parse (local_ui_intercept.go) keeps using plain Parse: its JSON-RPC
+// result actually returns the annotated image to the caller.
 func (p *Parser) ParseFast(imgBytes []byte) (result *Result, err error) {
 	_, result, err = p.parse(imgBytes, false, nil)
 	return result, err
@@ -151,23 +165,97 @@ func (p *Parser) ParseFast(imgBytes []byte) (result *Result, err error) {
 // needs text and only runs once OCR is done) and gets filled in on the
 // final Result as usual.
 //
+// ai_vision.go doesn't actually use this anymore -- it runs icon_detect
+// and OCR as two fully independent loops instead (ParseIconsOnly +
+// ParseFast, see maybeKickIconDetection/maybeKickOCR) so the icon loop
+// never has to share a goroutine, or wait its turn, with a still-running
+// OCR pass at all. ParseStaged is kept for cmd/localui_bench -staged and
+// any future caller that specifically wants "one pass, two checkpoints"
+// rather than two independently-paced passes.
+//
 // Built for ai_vision.go's live overlay (maybeKickDetection): before this,
 // the icon/grid overlay and the text overlay updated together once per
 // Parse call, so a slow OCR pass on a text-heavy frame held up icon boxes
 // that were ready seconds earlier -- exactly the "OCR blocks grid
-// detection" behavior this exists to fix. It does NOT change how often a
-// new detection pass can be *started*: Parser serializes all calls behind
-// one mutex, so the next pass still waits for this one's OCR stage to
-// finish and release it (see the mutex below) -- only publishing within a
-// single pass got faster, not the pass-to-pass cadence.
+// detection" behavior this exists to fix. Since iconMu/textMu are separate
+// locks (see Parser's doc comment), a ParseIconsOnly call from a newer
+// frame can also now run concurrently with this call's OCR stage instead
+// of queuing up behind it -- so ai_vision.go pairs this with its own
+// separate icon-only kickoff loop (see ParseIconsOnly) rather than relying
+// on ParseStaged calls alone to keep the grid responsive pass-to-pass.
 func (p *Parser) ParseStaged(imgBytes []byte, onIcons func(icons []Icon)) (result *Result, err error) {
 	_, result, err = p.parse(imgBytes, false, onIcons)
 	return result, err
 }
 
+// ParseIconsOnly decodes imgBytes and runs icon_detect ONLY -- no dbnet, no
+// svtr, no marked PNG. Assigns icons their own "00".."FF" IDs (assignMarkIDs
+// with no text) as if there were no text at all; a concurrent/later
+// ParseStaged/ParseFast/Parse call numbers icons the same way (icons always
+// come first, see assignMarkIDs), so in practice IDs from two calls on a
+// similar frame line up, but there's no hard guarantee across independent
+// calls the way there is between ParseStaged's onIcons callback and its own
+// final Result (same slice, numbered once).
+//
+// Built for ai_vision.go's live overlay: icon_detect is cheap (CoreML:
+// typically 100-300ms, see NewParser's doc comment), so it's given its own
+// fast, independent kickoff cadence, decoupled from the much slower dbnet+
+// svtr OCR pass. This only works because it takes iconMu, never textMu (see
+// Parser's doc comment) -- it can run concurrently with an OCR pass from an
+// older frame still in flight on a different goroutine. This is what
+// actually keeps the visible grid responsive: before iconMu/textMu were
+// split apart, ANY new detection pass -- icon-only or not -- had to wait
+// for the previous pass's OCR to finish and release Parser's one shared
+// mutex, however long that took (multiple seconds on a text-heavy frame),
+// which is what made box positions visibly lag behind the actual screen.
+func (p *Parser) ParseIconsOnly(imgBytes []byte) (icons []Icon, err error) {
+	original, err := decodeToRGB(imgBytes)
+	if err != nil {
+		return nil, fmt.Errorf("decode image: %w", err)
+	}
+	if original.W == 0 || original.H == 0 {
+		return nil, fmt.Errorf("decode image: empty result")
+	}
+	icons, err = p.runIconStage(original)
+	if err != nil {
+		return nil, err
+	}
+	assignMarkIDs(icons, nil)
+	return icons, nil
+}
+
+// runIconStage runs icon_detect (CLAHE+letterbox prep, inference, YOLO
+// decode+coordinate-mapping) and returns icons in original-image
+// coordinates -- no IDs assigned, no labels (callers number/associate as
+// appropriate for their own context, see ParseIconsOnly and parse's
+// onIcons handling). Only the inference call itself (p.icon.run) needs
+// iconMu -- prep is pure Go/CPU and decode is pure math on the output, so
+// neither touches the shared session state a concurrent call could race on.
+func (p *Parser) runIconStage(original *rgbImage) ([]Icon, error) {
+	tIcon := time.Now()
+	clahe := applyCLAHE(original)
+	claheLB, iconLBMeta := letterboxRGB(clahe, iconInputSize)
+	iconInput := claheLB.toNCHWFloat()
+	tIconPrep := time.Since(tIcon)
+
+	p.iconMu.Lock()
+	tIconInfer := time.Now()
+	iconOut, err := p.icon.run(iconInput)
+	p.iconMu.Unlock()
+	if err != nil {
+		return nil, fmt.Errorf("icon_detect inference: %w", err)
+	}
+
+	var icons []Icon
+	for _, icon := range decodeYOLO(iconOut) {
+		icon.Bbox = iconLBMeta.toOriginal(icon.Bbox)
+		icons = append(icons, icon)
+	}
+	debugf("icon_detect: prep(CLAHE+letterbox)=%v infer+decode=%v -> %d icons", tIconPrep, time.Since(tIconInfer), len(icons))
+	return icons, nil
+}
+
 func (p *Parser) parse(imgBytes []byte, drawMarked bool, onIcons func(icons []Icon)) (markedPNG []byte, result *Result, err error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	t0 := time.Now()
 
 	tDecode := time.Now()
@@ -182,23 +270,10 @@ func (p *Parser) parse(imgBytes []byte, drawMarked bool, onIcons func(icons []Ic
 
 	res := &Result{ImageWidth: original.W, ImageHeight: original.H, Backend: backendLabel(p.accel)}
 
-	// -- Icons --
-	tIcon := time.Now()
-	clahe := applyCLAHE(original)
-	claheLB, iconLBMeta := letterboxRGB(clahe, iconInputSize)
-	iconInput := claheLB.toNCHWFloat()
-	tIconPrep := time.Since(tIcon)
-
-	tIconInfer := time.Now()
-	iconOut, err := p.icon.run(iconInput)
+	res.Icons, err = p.runIconStage(original)
 	if err != nil {
-		return nil, nil, fmt.Errorf("icon_detect inference: %w", err)
+		return nil, nil, err
 	}
-	for _, icon := range decodeYOLO(iconOut) {
-		icon.Bbox = iconLBMeta.toOriginal(icon.Bbox)
-		res.Icons = append(res.Icons, icon)
-	}
-	debugf("icon_detect: prep(CLAHE+letterbox)=%v infer+decode=%v -> %d icons", tIconPrep, time.Since(tIconInfer), len(res.Icons))
 
 	if onIcons != nil {
 		// iconsCopy: onIcons's caller (ai_vision.go) hands this straight to
@@ -213,6 +288,12 @@ func (p *Parser) parse(imgBytes []byte, drawMarked bool, onIcons func(icons []Ic
 	}
 
 	// -- Text (tiled DBNet, see tile.go) --
+	// textMu is a separate lock from iconMu (see Parser's doc comment):
+	// held for the rest of this call so a concurrent ParseIconsOnly on a
+	// newer frame never has to wait for this dbnet+svtr pass to finish.
+	p.textMu.Lock()
+	defer p.textMu.Unlock()
+
 	tiles := tileRects(original.W, original.H, dbnetMapSize, dbnetTileOverlap)
 	if tiles == nil {
 		tiles = []rect{{X1: 0, Y1: 0, X2: original.W, Y2: original.H}}

@@ -18,8 +18,10 @@ func resetAIVisionState(t *testing.T) {
 	savedPush, savedClear := aiVisionMetalPush, aiVisionMetalClear
 	clear := func() {
 		aiVisionEnabled.Store(false)
-		aiVisionBusy.Store(false)
-		aiVisionLastRun.Store(0)
+		aiVisionIconBusy.Store(false)
+		aiVisionIconLastRun.Store(0)
+		aiVisionOCRBusy.Store(false)
+		aiVisionOCRLastRun.Store(0)
 		aiVisionMu.Lock()
 		aiVisionResult = nil
 		aiVisionMu.Unlock()
@@ -98,7 +100,7 @@ func TestApplyAIVisionOverlayDisabledIsNoop(t *testing.T) {
 	if !bytes.Equal(rgba, before) {
 		t.Error("ApplyAIVisionOverlay must not touch the frame buffer while disabled")
 	}
-	if aiVisionBusy.Load() {
+	if aiVisionIconBusy.Load() || aiVisionOCRBusy.Load() {
 		t.Error("ApplyAIVisionOverlay must not kick off detection while disabled")
 	}
 }
@@ -106,9 +108,10 @@ func TestApplyAIVisionOverlayDisabledIsNoop(t *testing.T) {
 // TestApplyAIVisionOverlayNoParserDoesNotWedgeBusy exercises the "enabled
 // but no local ui.parse backend loaded" path (GetLocalUIParser() returns
 // nil in a fresh test process, same as a client that never enabled Local
-// ui.parse offload): maybeKickDetection must release aiVisionBusy instead
-// of leaving it permanently stuck true, or every future frame would
-// silently skip kicking off detection forever once a parser is loaded.
+// ui.parse offload): both maybeKickIconDetection and maybeKickOCR must
+// release their own busy flag instead of leaving it permanently stuck
+// true, or every future frame would silently skip kicking off detection
+// forever once a parser is loaded.
 func TestApplyAIVisionOverlayNoParserDoesNotWedgeBusy(t *testing.T) {
 	resetAIVisionState(t)
 	SetAIVisionEnabled(true)
@@ -117,31 +120,56 @@ func TestApplyAIVisionOverlayNoParserDoesNotWedgeBusy(t *testing.T) {
 	rgba := make([]byte, w*h*4)
 	ApplyAIVisionOverlay(rgba, w, h, w*4)
 
-	if aiVisionBusy.Load() {
-		t.Error("maybeKickDetection must release aiVisionBusy when no parser is loaded, not wedge it true")
+	if aiVisionIconBusy.Load() {
+		t.Error("maybeKickIconDetection must release aiVisionIconBusy when no parser is loaded, not wedge it true")
+	}
+	if aiVisionOCRBusy.Load() {
+		t.Error("maybeKickOCR must release aiVisionOCRBusy when no parser is loaded, not wedge it true")
 	}
 }
 
-// TestMaybeKickDetectionRespectsInterval confirms the throttle: a second
-// call inside aiVisionInterval of the first must not flip aiVisionBusy
-// again (i.e. must not attempt another kickoff) even though the first
-// kickoff bailed out immediately (no parser loaded, in this test process).
-func TestMaybeKickDetectionRespectsInterval(t *testing.T) {
+// TestMaybeKickIconDetectionRespectsInterval confirms the throttle: a
+// second call inside aiVisionIconInterval of the first must not record
+// another kickoff, even though the first kickoff bailed out immediately
+// (no parser loaded, in this test process).
+func TestMaybeKickIconDetectionRespectsInterval(t *testing.T) {
 	resetAIVisionState(t)
 	SetAIVisionEnabled(true)
 
 	const w, h = 2, 2
 	rgba := make([]byte, w*h*4)
 
-	maybeKickDetection(rgba, w, h, w*4)
-	firstRun := aiVisionLastRun.Load()
+	maybeKickIconDetection(rgba, w, h, w*4)
+	firstRun := aiVisionIconLastRun.Load()
 	if firstRun == 0 {
-		t.Fatal("first maybeKickDetection call should have recorded a kickoff time")
+		t.Fatal("first maybeKickIconDetection call should have recorded a kickoff time")
 	}
 
-	maybeKickDetection(rgba, w, h, w*4)
-	if aiVisionLastRun.Load() != firstRun {
-		t.Error("a second maybeKickDetection call within aiVisionInterval must not record a new kickoff")
+	maybeKickIconDetection(rgba, w, h, w*4)
+	if aiVisionIconLastRun.Load() != firstRun {
+		t.Error("a second maybeKickIconDetection call within aiVisionIconInterval must not record a new kickoff")
+	}
+}
+
+// TestMaybeKickOCRRespectsInterval is TestMaybeKickIconDetectionRespectsInterval's
+// counterpart for the OCR loop -- pins that the two loops' throttles are
+// genuinely independent state, not the same flag under two names.
+func TestMaybeKickOCRRespectsInterval(t *testing.T) {
+	resetAIVisionState(t)
+	SetAIVisionEnabled(true)
+
+	const w, h = 2, 2
+	rgba := make([]byte, w*h*4)
+
+	maybeKickOCR(rgba, w, h, w*4)
+	firstRun := aiVisionOCRLastRun.Load()
+	if firstRun == 0 {
+		t.Fatal("first maybeKickOCR call should have recorded a kickoff time")
+	}
+
+	maybeKickOCR(rgba, w, h, w*4)
+	if aiVisionOCRLastRun.Load() != firstRun {
+		t.Error("a second maybeKickOCR call within aiVisionOCRInterval must not record a new kickoff")
 	}
 }
 

@@ -121,8 +121,12 @@ func NewConnectionEditPanel(data ConnectionEditPanelData, actions ConnectionEdit
 	// the info box, 3px above the buttons, and the card's own bottom
 	// margin brought down to that same 3px (was 14, matching the other
 	// three sides) so the gap below the buttons doesn't read as bigger
-	// than the gap above them.
-	content := NewInset(container.NewVBox(
+	// than the gap above them. tightStatsVBoxLayout (not container.NewVBox,
+	// which adds its own hidden inter-child theme padding on top of these
+	// -- that stray couple px was exactly why "above" still read bigger
+	// than "below" even at matching NewInset values) stacks with only the
+	// gap it's told to, so these 3px are the whole story now.
+	content := NewInset(container.New(&tightStatsVBoxLayout{Gap: 0},
 		topRow,
 		NewInset(statsBox, 0, 0, 3, 0),
 		NewInset(bottomRow, 0, 0, 3, 0),

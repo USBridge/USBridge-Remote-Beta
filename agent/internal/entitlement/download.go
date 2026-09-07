@@ -367,9 +367,33 @@ func writeAtomic(dest string, src io.Reader, perm os.FileMode) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(tmpPath, dest); err != nil {
+	if err := renameWithRetry(tmpPath, dest); err != nil {
 		return fmt.Errorf("entitlement: install staged binary: %w", err)
 	}
 	ok = true
 	return nil
+}
+
+// renameWithRetry retries os.Rename briefly on failure. On Windows,
+// replacing a just-killed process's own .exe can still fail with "Access is
+// denied" for a short window after the process is gone -- the OS doesn't
+// necessarily release the image section's file lock the instant the process
+// exits (confirmed live: a caller-side 500ms wait after Stop() before
+// staging still wasn't always enough). A no-op extra cost everywhere else:
+// the first attempt succeeds immediately on Linux/macOS (rename-over-open-
+// file is always allowed there) and in the normal case here too, this only
+// spins when the first attempt actually failed.
+func renameWithRetry(oldpath, newpath string) error {
+	const attempts = 10
+	const delay = 300 * time.Millisecond
+	var err error
+	for i := 0; i < attempts; i++ {
+		if i > 0 {
+			time.Sleep(delay)
+		}
+		if err = os.Rename(oldpath, newpath); err == nil {
+			return nil
+		}
+	}
+	return err
 }

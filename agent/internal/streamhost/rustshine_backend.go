@@ -116,6 +116,26 @@ type rustshineBackend struct {
 	activeAdminPassword string
 	adminPort           int // set by Start; CurrentVideoCodec needs it despite taking no args itself
 
+	// lastLaunchAt/crashStreak implement a restart backoff. app.startSunshine
+	// is wired as this backend's onExit callback (see SetOnExit) and is
+	// invoked with zero delay on every process exit, crashed or not -- fine
+	// for a real crash (recover fast), catastrophic for a process that fails
+	// instantly and deterministically every single time (e.g. gamestream-server
+	// rejecting a CLI flag the Go side always passes -- confirmed live: an
+	// agent whose staged binary predated a newer --hardware-id flag
+	// respawned it 10-15x/sec, saturating a CPU core and writing gigabytes
+	// to the log file within minutes). That tight loop is also
+	// self-perpetuating: entitlement.StageRustShine's os.Rename over the
+	// staged binary needs it to sit still for a moment, which a
+	// near-100%-duty-cycle respawn loop never allows, so the very update
+	// that would fix the crash can never land either. Start() consults
+	// these to slow down (not stop -- a real transient crash still needs to
+	// recover reasonably fast) once a pattern of near-instant exits shows
+	// up, both bounding the damage and giving the auto-updater's rename an
+	// actual window to land in.
+	lastLaunchAt time.Time
+	crashStreak  int
+
 	// sharedSecret is the agent's own master key, handed to gamestream-server
 	// via --webrtc-shared-secret so its native WebRTC signaling endpoint
 	// (POST /webrtc/offer) authenticates requests the same way every other
@@ -500,6 +520,22 @@ func (b *rustshineBackend) Start(adminPort int) error {
 
 	launchDir := filepath.Dir(launchPath)
 
+	// Crash-loop backoff: if the previous launch died almost immediately
+	// (< rustshineCrashLoopThreshold alive), sleep an increasing delay
+	// before trying again instead of respawning at whatever rate onExit
+	// gets invoked at. See crashStreak's doc comment on the struct for why
+	// this matters -- both to stop a deterministically-failing binary from
+	// pegging a CPU core / the log file, and to give a concurrent
+	// entitlement.StageRustShine update (which needs the exe to sit still
+	// long enough for os.Rename to land on Windows) an actual window.
+	// crashStreak is reset once a launch survives past the threshold (see
+	// watchProcessExit), so a real transient crash still recovers quickly.
+	if b.crashStreak > 0 {
+		delay := rustshineCrashBackoff(b.crashStreak)
+		log.Printf("[rustshine] %d consecutive near-instant exits, backing off %s before retrying", b.crashStreak, delay)
+		time.Sleep(delay)
+	}
+
 	// Shared log destination for both launch paths below. Truncates a log
 	// that's grown past a sane cap instead of appending forever -- this
 	// file used to reach 1.3GB+ across long-running agent uptimes even
@@ -577,9 +613,35 @@ func (b *rustshineBackend) Start(adminPort int) error {
 
 	b.launchPath = launchPath
 	b.proc = proc
+	b.lastLaunchAt = time.Now()
 	go b.watchProcessExit(proc)
 
 	return nil
+}
+
+// rustshineCrashLoopThreshold is how long a launch must stay alive to be
+// considered a real run rather than an instant failure (a wrong CLI flag, a
+// missing DLL, ...). Comfortably above gamestream-server's own startup work
+// (device/codec probing etc., normally well under a second) so a genuinely
+// slow-but-successful boot never gets mistaken for a crash.
+const rustshineCrashLoopThreshold = 2 * time.Second
+
+// rustshineCrashBackoff maps a consecutive-near-instant-exit count to a
+// delay before the next retry: 0.5s, 1s, 2s, 4s, ... capped at 30s so a
+// deterministically-failing binary still gets retried often enough to
+// recover promptly once whatever's wrong (e.g. a stale staged build) is
+// fixed out from under it, without pegging a CPU core or the log file in
+// the meantime.
+func rustshineCrashBackoff(streak int) time.Duration {
+	const maxBackoff = 30 * time.Second
+	d := 500 * time.Millisecond
+	for i := 1; i < streak && d < maxBackoff; i++ {
+		d *= 2
+	}
+	if d > maxBackoff {
+		d = maxBackoff
+	}
+	return d
 }
 
 // startViaSessionBroker launches gamestream-server into the active console
@@ -619,6 +681,14 @@ func (b *rustshineBackend) watchProcessExit(proc rustshineProcess) {
 	wasOurs := b.proc == proc
 	if wasOurs {
 		b.proc = nil
+		// Track near-instant exits so the next Start() backs off instead of
+		// respawning as fast as onExit gets invoked -- see crashStreak's
+		// doc comment on the struct.
+		if !b.lastLaunchAt.IsZero() && time.Since(b.lastLaunchAt) < rustshineCrashLoopThreshold {
+			b.crashStreak++
+		} else {
+			b.crashStreak = 0
+		}
 	}
 	onExit := b.onExit
 	b.mu.Unlock()
@@ -652,6 +722,13 @@ func (b *rustshineBackend) SetOnExit(fn func()) {
 func (b *rustshineBackend) Stop() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	// A deliberate Stop() (switching backends, an update replacing the
+	// binary, ...) isn't the crash this backoff exists for -- don't let a
+	// prior crash streak delay whatever Start() comes next. watchProcessExit
+	// wouldn't count this exit against the streak anyway (b.proc is cleared
+	// below before it observes the exit), but reset explicitly so a Start()
+	// called before that goroutine even runs doesn't inherit a stale one.
+	b.crashStreak = 0
 	var err error
 	if b.proc != nil {
 		log.Printf("[rustshine] stopping pid=%d", b.proc.Pid())

@@ -127,13 +127,12 @@ func NewAddConnectionGridCard(actions AddConnectionCardActions) fyne.CanvasObjec
 		container.New(&capWidthLayout{MaxWidth: 220}, subtitle),
 	)
 
-	// Same clipboard-paste glyph newGridCardFieldActions' pasteIcon uses,
-	// just muted instead of the field-action light yellow -- this is a
-	// secondary bordered button (matches deleteBtn/cancelBtn's chrome
-	// elsewhere in this package), not another accent-colored affordance.
-	const pasteIconPath = `<path d="M19 2h-4.18C14.4.84 13.3 0 12 0c-1.3 0-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm7 18H5V4h2v3h10V4h2v16z"/>`
-	pasteIcon := fyne.NewStaticResource("add-device-paste.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="`+addConnectionCardMutedColorHex+`">`+pasteIconPath+`</svg>`))
-	pasteIconHover := fyne.NewStaticResource("add-device-paste-hover.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="`+addConnectionCardHoverColorHex+`">`+pasteIconPath+`</svg>`))
+	// Chain-link glyph (assets.LinkIconMuted/LinkIconLime) -- same icon the
+	// Add Connection dialog's own Paste Link button now uses, replacing
+	// this card's previous clipboard glyph so "paste a link" reads as one
+	// consistent affordance across both surfaces.
+	pasteIcon := assets.LinkIconMuted
+	pasteIconHover := assets.LinkIconLime
 
 	qrBtn := newIconChromeButton(iconChromeButtonSpec{
 		NormalFill:      color.Transparent,

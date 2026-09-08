@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Uploaded to: SVG Repo, www.svgrepo.com, Generator: SVG Repo Mixer Tools -->
+<svg width="800px" height="800px" viewBox="0 0 24 24" version="1.1" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+    <title>Link</title>
+    <g id="Page-1" stroke="none" stroke-width="1" fill="none" fill-rule="evenodd">
+        <g id="Link">
+            <rect id="Rectangle" fill-rule="nonzero" x="0" y="0" width="24" height="24">
+
+</rect>
+            <path d="M14,16 L17,16 C19.2091,16 21,14.2091 21,12 L21,12 C21,9.79086 19.2091,8 17,8 L14,8" id="Path" stroke="#0C0310" stroke-width="2" stroke-linecap="round">
+
+</path>
+            <path d="M10,16 L7,16 C4.79086,16 3,14.2091 3,12 L3,12 C3,9.79086 4.79086,8 7,8 L10,8" id="Path" stroke="#0C0310" stroke-width="2" stroke-linecap="round">
+
+</path>
+            <line x1="7.5" y1="12" x2="16.5" y2="12" id="Path" stroke="#0C0310" stroke-width="2" stroke-linecap="round">
+
+</line>
+        </g>
+    </g>
+</svg>

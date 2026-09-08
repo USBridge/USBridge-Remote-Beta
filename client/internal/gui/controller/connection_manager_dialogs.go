@@ -54,6 +54,12 @@ type connectionDialogSpec struct {
 	onSave                 func(name, internalHost, tailscaleHost, masterKey string, tailscaleRegister bool) bool
 	onDelete               func(close func())
 	onQR                   func()
+	// startWithPasteLink opens the dialog with the inline paste-link view
+	// already showing instead of the Name/LAN/TS/Token fields -- the "+"
+	// placeholder card's own Paste Link button jumps straight here instead
+	// of stopping at the normal fields view first (see handlePasteLink).
+	// Only meaningful alongside onQR, which is what builds that view.
+	startWithPasteLink bool
 }
 
 type connectionDialogSecondaryButton struct {
@@ -1112,11 +1118,17 @@ func showConnectionEditorDialog(parent fyne.Window, window fyne.Window, spec con
 		updateRegisterVisibility(text)
 	}
 
-	form := buildConnectionDialogForm(statsBox, registerCheckContainer)
+	normalForm := buildConnectionDialogForm(statsBox, registerCheckContainer)
+	// formSwap holds exactly one child at a time -- normalForm normally,
+	// swapped out for the inline paste view (below) while "Paste Link" is
+	// active, and back again on Cancel/Apply. A single-child Stack sizes to
+	// that one child's own MinSize, so the panel reflows to whichever is
+	// showing (see d.Refresh() calls at each swap site).
+	formSwap := container.NewStack(normalForm)
 
 	var d *widget.PopUp
 
-	var formContent fyne.CanvasObject = form
+	var formContent fyne.CanvasObject = formSwap
 	var mobileFooter fyne.CanvasObject
 	if spec.onQR != nil {
 		qrBtn := newConnectionDialogWideActionButton("Scan QR", assets.QRCodeTeal, design.ColorConnectionBadgeText, func() {
@@ -1125,12 +1137,30 @@ func showConnectionEditorDialog(parent fyne.Window, window fyne.Window, spec con
 			}
 			spec.onQR()
 		})
-		linkBtn := newConnectionDialogWideActionButton("Paste Link", assets.ConnectionStatusAccent, design.ColorConnectionAddFill, func() {
-			showPasteLinkDialog(parent, func(ih, th, mk string) {
-				lanEntry.SetText(ih)
-				tsEntry.SetText(th)
-				tokenEntry.SetText(mk)
-			})
+
+		showNormalFields := func() {
+			formSwap.Objects = []fyne.CanvasObject{normalForm}
+			formSwap.Refresh()
+			if d != nil {
+				d.Refresh()
+			}
+		}
+		pasteView := newConnectionDialogInlinePasteView(parent, func(ih, th, mk string) {
+			lanEntry.SetText(ih)
+			tsEntry.SetText(th)
+			tokenEntry.SetText(mk)
+			showNormalFields()
+		}, showNormalFields)
+		if spec.startWithPasteLink {
+			formSwap.Objects = []fyne.CanvasObject{pasteView}
+		}
+
+		linkBtn := newConnectionDialogWideActionButton("Paste Link", assets.LinkIconLime, design.ColorConnectionAddFill, func() {
+			formSwap.Objects = []fyne.CanvasObject{pasteView}
+			formSwap.Refresh()
+			if d != nil {
+				d.Refresh()
+			}
 		})
 		// Full width (equal split, GridWithColumns), not the buttons' own
 		// natural/content width -- they should span the same width as the
@@ -1152,7 +1182,7 @@ func showConnectionEditorDialog(parent fyne.Window, window fyne.Window, spec con
 				// nothing between them otherwise.
 				view.NewInset(iconRow, 0, 0, 14, 0),
 				view.NewInset(newConnectionDialogManualDivider(), 0, 0, 14, 10),
-				form,
+				formSwap,
 			)
 		}
 	}
@@ -1491,10 +1521,10 @@ func (cm *ConnectionManager) showAddDialog() {
 	if selected := normalizeConnectionProtocol(cm.protocolSelect.Selected); selected == models.ConnectionProtocolTailscale {
 		internalHost, tailscaleHost = "", strings.TrimSpace(cm.hostEntry.Text)
 	}
-	cm.showPrefilledAddDialog("", internalHost, tailscaleHost, cm.masterKeyEntry.Text, "", false)
+	cm.showPrefilledAddDialog("", internalHost, tailscaleHost, cm.masterKeyEntry.Text, "", false, false)
 }
 
-func (cm *ConnectionManager) showPrefilledAddDialog(name, internalHost, tailscaleHost, masterKey, protocol string, scanned bool) {
+func (cm *ConnectionManager) showPrefilledAddDialog(name, internalHost, tailscaleHost, masterKey, protocol string, scanned, startWithPasteLink bool) {
 	feedbackText := ""
 	if scanned {
 		feedbackText = qrScanSuccessText
@@ -1516,6 +1546,7 @@ func (cm *ConnectionManager) showPrefilledAddDialog(name, internalHost, tailscal
 		tailscaleRegisterValue: strings.TrimSpace(tailscaleHost) == "" && tailscaleRegisterUISupported(),
 		feedbackText:           feedbackText,
 		feedbackColor:          design.ColorAccent,
+		startWithPasteLink:     startWithPasteLink,
 		onConnect: func(name, internalHost, tailscaleHost, masterKey string, tailscaleRegister bool) bool {
 			internalHost = strings.TrimSpace(internalHost)
 			tailscaleHost = strings.TrimSpace(tailscaleHost)
@@ -1822,36 +1853,31 @@ func (cm *ConnectionManager) handleQRScan() {
 	cm.qrScanner.ShowCameraScanner(cm.window)
 }
 
-// showPasteLinkDialog shows a small popup with a text entry for pasting a
-// usbridge:// deep link. On apply, it calls onApply with the parsed hosts.
-func showPasteLinkDialog(parent fyne.Window, onApply func(internalHost, tailscaleHost, masterKey string)) {
-	title := view.NewBrandText("Paste Link", 17, design.ColorTextLight, true)
-	title.Alignment = fyne.TextAlignCenter
-
+// newConnectionDialogInlinePasteView is what "Paste Link" swaps the
+// Name/LAN/TS/Token box for, in place -- a single usbridge:// link field in
+// that same card chrome (dark box, thin border, radius), with Cancel/Paste/
+// Apply icon buttons underneath, instead of stacking a second modal on top
+// of the Add Connection dialog just to paste one line of text. onApply
+// receives the parsed hosts so the caller can refill the real fields and
+// swap back to them; the X button (onCancel) discards whatever was typed
+// and swaps back untouched.
+func newConnectionDialogInlinePasteView(parent fyne.Window, onApply func(internalHost, tailscaleHost, masterKey string), onCancel func()) fyne.CanvasObject {
 	entry := &connectionDialogEntry{}
 	entry.MultiLine = true
 	entry.Wrapping = fyne.TextWrapWord
 	entry.ExtendBaseWidget(entry)
 	entry.SetPlaceHolder("usbridge://connect?...")
-	entry.SetMinRowsVisible(4)
+	entry.SetMinRowsVisible(3)
 
 	errLabel := canvas.NewText("", color.NRGBA{R: 0xff, G: 0x5a, B: 0x52, A: 0xff})
-	errLabel.TextSize = 11
+	errLabel.TextSize = 10
 
-	var popup *widget.PopUp
-
-	applyFn := func() {
-		ih, th, mk, _, err := parseQRContents(entry.Text)
-		if err != nil {
-			errLabel.Text = "Invalid link format"
-			errLabel.Refresh()
-			return
-		}
-		if popup != nil {
-			popup.Hide()
-		}
-		onApply(ih, th, mk)
+	reset := func() {
+		entry.SetText("")
+		errLabel.Text = ""
+		errLabel.Refresh()
 	}
+
 	entry.onFocusChanged = nil
 	entry.OnChanged = func(_ string) {
 		if errLabel.Text != "" {
@@ -1860,63 +1886,41 @@ func showPasteLinkDialog(parent fyne.Window, onApply func(internalHost, tailscal
 		}
 	}
 
-	var closeBtn *connectionDialogIconButton
-	closeBtn = newConnectionDialogIconButton(theme.CancelIcon(), func() {
-		if popup != nil {
-			popup.Hide()
-		}
+	closeBtn := newCompactConnectionDialogIconButton(theme.CancelIcon(), func() {
+		reset()
+		onCancel()
 	})
-	titleBar := container.New(&connectionDialogTitleLayout{}, title, closeBtn)
-
-	// This entry has no icon/copy/paste input-group chrome the way the
-	// address/key fields in the main editor do (see fieldActions) -- it's a
-	// bare multi-line textarea meant to be filled by pasting a whole
-	// usbridge:// link, so a Paste button matters here even more than on
-	// those. Same platform-split pasteClipboardInto (Fyne's own Clipboard()
-	// on desktop/mobile, navigator.clipboard.readText() on wasm) that
-	// powers the Copy/Paste pair everywhere else.
-	pasteBtn := newConnectionDialogIconButton(theme.ContentPasteIcon(), func() {
+	// Same platform-split pasteClipboardInto (Fyne's own Clipboard() on
+	// desktop/mobile, navigator.clipboard.readText() on wasm) that powers
+	// the Copy/Paste pair on every other field in this dialog.
+	pasteBtn := newCompactConnectionDialogIconButton(theme.ContentPasteIcon(), func() {
 		pasteClipboardInto(entry, parent)
 	})
-	pasteRow := container.NewHBox(layout.NewSpacer(), pasteBtn)
-
-	applyBtn := view.NewConnectionPrimaryButton("Apply", applyFn)
-	applyBtn.SetAccent(true)
-
-	body := container.NewVBox(
-		view.NewInset(titleBar, 0, 0, 0, 10),
-		widget.NewSeparator(),
-		view.NewInset(container.NewVBox(pasteRow, entry, errLabel), 0, 0, 8, 8),
-		widget.NewSeparator(),
-		view.NewInset(applyBtn, 0, 0, 8, 0),
-	)
-
-	bg := canvas.NewRectangle(design.ColorGray900)
-	bg.CornerRadius = design.RadiusMD
-	border := canvas.NewRectangle(color.Transparent)
-	border.CornerRadius = design.RadiusMD
-	border.StrokeColor = design.ColorBorder
-	border.StrokeWidth = 1
-	panel := container.NewStack(
-		bg,
-		view.NewInset(body, 18, 18, 16, 16),
-		border,
-	)
-
-	popup = view.ShowOverlayPopup(parent, view.OverlayPopupSpec{
-		Panel:    panel,
-		DimColor: connectionDialogDimColor(),
-		PanelSize: func(canvasSize fyne.Size, panel fyne.CanvasObject) fyne.Size {
-			panelMin := panel.MinSize()
-			w := minFloat32(maxFloat32(panelMin.Width, 340), canvasSize.Width-48)
-			h := minFloat32(maxFloat32(panelMin.Height, 0), canvasSize.Height-48)
-			return fyne.NewSize(w, h)
-		},
+	applyBtn := newCompactConnectionDialogIconButton(theme.ConfirmIcon(), func() {
+		ih, th, mk, _, err := parseQRContents(entry.Text)
+		if err != nil {
+			errLabel.Text = "Invalid link format"
+			errLabel.Refresh()
+			return
+		}
+		reset()
+		onApply(ih, th, mk)
 	})
+	// X on the left, Paste+Apply grouped on the right -- same left/right
+	// split the dialog's own footer uses for Cancel vs. Connect/Save.
+	actionsRow := container.NewHBox(closeBtn, layout.NewSpacer(), pasteBtn, applyBtn)
+
+	bg := canvas.NewRectangle(design.ColorGray950)
+	bg.CornerRadius = 6
+	bg.StrokeColor = design.ColorTailscaleChipBorder
+	bg.StrokeWidth = 1
+	body := container.NewVBox(entry, errLabel, view.NewInset(actionsRow, 0, 0, 8, 0))
+	return container.NewStack(bg, view.NewInset(body, 12, 12, 10, 8))
 }
 
 func (cm *ConnectionManager) handlePasteLink() {
-	showPasteLinkDialog(cm.window, func(ih, th, mk string) {
-		cm.showPrefilledAddDialog("", ih, th, mk, "", false)
-	})
+	// Straight into the Add Connection dialog with the paste view already
+	// showing -- no more separate popup that then reopens this same dialog
+	// on apply (see connectionDialogSpec.startWithPasteLink).
+	cm.showPrefilledAddDialog("", "", "", "", "", false, true)
 }

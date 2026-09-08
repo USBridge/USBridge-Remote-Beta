@@ -227,7 +227,7 @@ func NewConnectionManager(app fyne.App, window fyne.Window, config *models.AppCo
 			logrus.Infof("QR saved directly: internal=%s tailscale=%s", internalHost, tailscaleHost)
 		},
 		func(internalHost, tailscaleHost, masterKey, protocol string, scanned bool) {
-			cm.showPrefilledAddDialog("", internalHost, tailscaleHost, masterKey, protocol, scanned)
+			cm.showPrefilledAddDialog("", internalHost, tailscaleHost, masterKey, protocol, scanned, false)
 		},
 	)
 

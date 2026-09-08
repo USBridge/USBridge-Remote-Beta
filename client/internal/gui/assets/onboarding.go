@@ -89,6 +89,8 @@ var (
 	windowsOSIcon []byte
 	//go:embed macos-svgrepo-com.svg
 	macosOSIcon []byte
+	//go:embed link-svgrepo-com.svg
+	linkIcon []byte
 	//go:embed onboarding/Front_panel.png
 	onboardingStep01 []byte
 )
@@ -129,15 +131,25 @@ var (
 	// recolorMonoIcon, not recolorStrokeIcon: question-svgrepo-com.svg mixes
 	// a stroked circle with a filled "?" glyph -- see QuestionIconHeader's
 	// comment above for the full explanation.
-	QuestionIconDim            = fyne.NewStaticResource("question-svgrepo-com-dim.svg", recolorMonoIcon(questionIcon, "#8E8E8E", "2.6"))
-	QuestionIconMuted          = fyne.NewStaticResource("question-svgrepo-com-muted.svg", recolorMonoIcon(questionIcon, "#C9C9C9", "2.6"))
-	QuestionIcon               = fyne.NewStaticResource("question-svgrepo-com.svg", recolorMonoIcon(questionIcon, "#F5F5F5", "2.6"))
-	QRCodeIcon                 = fyne.NewStaticResource("Qr-Code--Streamline-Atlas.svg", qrCodeIcon)
-	QRCodeMuted                = fyne.NewStaticResource("Qr-Code--Streamline-Atlas-muted.svg", recolorStrokeIcon(qrCodeIcon, "#656565", "1.3"))
-	QRCodeLight                = fyne.NewStaticResource("Qr-Code--Streamline-Atlas-light.svg", recolorStrokeIcon(qrCodeIcon, "#C9C9C9", "1.3"))
-	QRCodeAccent               = fyne.NewStaticResource("Qr-Code--Streamline-Atlas-accent.svg", recolorStrokeIcon(qrCodeIcon, "#b6ea93", "1.3"))
-	QRCodeTeal                 = fyne.NewStaticResource("Qr-Code--Streamline-Atlas-teal.svg", recolorStrokeIcon(qrCodeIcon, "#41e0c3", "1.3"))
-	QRCodeBoldBlack            = fyne.NewStaticResource("Qr-Code--Streamline-Atlas-black.svg", recolorStrokeIcon(qrCodeIcon, "#111111", "1.3"))
+	QuestionIconDim   = fyne.NewStaticResource("question-svgrepo-com-dim.svg", recolorMonoIcon(questionIcon, "#8E8E8E", "2.6"))
+	QuestionIconMuted = fyne.NewStaticResource("question-svgrepo-com-muted.svg", recolorMonoIcon(questionIcon, "#C9C9C9", "2.6"))
+	QuestionIcon      = fyne.NewStaticResource("question-svgrepo-com.svg", recolorMonoIcon(questionIcon, "#F5F5F5", "2.6"))
+	QRCodeIcon        = fyne.NewStaticResource("Qr-Code--Streamline-Atlas.svg", qrCodeIcon)
+	QRCodeMuted       = fyne.NewStaticResource("Qr-Code--Streamline-Atlas-muted.svg", recolorStrokeIcon(qrCodeIcon, "#656565", "1.3"))
+	QRCodeLight       = fyne.NewStaticResource("Qr-Code--Streamline-Atlas-light.svg", recolorStrokeIcon(qrCodeIcon, "#C9C9C9", "1.3"))
+	QRCodeAccent      = fyne.NewStaticResource("Qr-Code--Streamline-Atlas-accent.svg", recolorStrokeIcon(qrCodeIcon, "#b6ea93", "1.3"))
+	QRCodeTeal        = fyne.NewStaticResource("Qr-Code--Streamline-Atlas-teal.svg", recolorStrokeIcon(qrCodeIcon, "#41e0c3", "1.3"))
+	QRCodeBoldBlack   = fyne.NewStaticResource("Qr-Code--Streamline-Atlas-black.svg", recolorStrokeIcon(qrCodeIcon, "#111111", "1.3"))
+	// LinkIconMuted/LinkIconLime -- the Paste Link chain-link glyph, shared
+	// by the "+" placeholder card's own Paste Link button and the Add
+	// Connection dialog's inline paste-link view (both replaced their
+	// previous mismatched clipboard/connection glyphs with this one so
+	// "paste a link" reads as the same affordance everywhere). Muted is
+	// the card's resting-state gray; Lime is the shared hover/accent tint
+	// (addConnectionCardHoverColorHex and design.ColorConnectionAddFill
+	// are both this same "#c4e77a", so one variant covers both callers).
+	LinkIconMuted              = fyne.NewStaticResource("link-svgrepo-com-muted.svg", recolorStrokeIcon(linkIcon, "#c5c8b5", "2"))
+	LinkIconLime               = fyne.NewStaticResource("link-svgrepo-com-lime.svg", recolorStrokeIcon(linkIcon, "#c4e77a", "2"))
 	ServerConnectIcon          = fyne.NewStaticResource("Server-Connect--Streamline-Atlas.svg", serverConnectIcon)
 	ServerConnectMuted         = fyne.NewStaticResource("Server-Connect--Streamline-Atlas-muted.svg", boldenServerIcon(serverConnectIcon, "#656565", "1.9"))
 	ServerConnectBold          = fyne.NewStaticResource("Server-Connect--Streamline-Atlas-bold.svg", boldenServerIcon(serverConnectIcon, "#111111", "1.9"))
@@ -258,7 +270,7 @@ func recolorMemoryChipIcon(source []byte, fill string) []byte {
 
 func recolorStrokeIcon(source []byte, stroke string, width string) []byte {
 	svg := string(source)
-	strokePattern := regexp.MustCompile(`stroke="(?:#000000|#0F0F0F|#222222|black)"`)
+	strokePattern := regexp.MustCompile(`stroke="(?:#000000|#0F0F0F|#222222|#0C0310|black)"`)
 	svg = strokePattern.ReplaceAllString(svg, fmt.Sprintf(`stroke="%s"`, stroke))
 	strokeWidthPattern := regexp.MustCompile(`stroke-width="[^"]+"`)
 	svg = strokeWidthPattern.ReplaceAllString(svg, fmt.Sprintf(`stroke-width="%s"`, width))

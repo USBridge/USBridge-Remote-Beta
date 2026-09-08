@@ -34,6 +34,7 @@ import (
 	"usbridge_agent/internal/input"
 	"usbridge_agent/internal/netutil"
 	"usbridge_agent/internal/permissions"
+	"usbridge_agent/internal/sasinput"
 	"usbridge_agent/internal/streamhost"
 	"usbridge_agent/internal/tailscale"
 	"usbridge_agent/internal/ui"
@@ -952,6 +953,20 @@ func (a *App) SetSunshineCaptureMode(mode string) error {
 		log.Printf("[app] failed to restart Sunshine after capture mode change: %v", err)
 	}
 	return nil
+}
+
+// SendSAS raises a Secure Attention Sequence (Ctrl+Alt+Del) in whatever
+// session is currently on the physical console -- see sasinput's package
+// doc for why this exists at all: on a Windows machine with "require
+// CTRL+ALT+DEL" enabled, this is the one input a client's ordinary keyboard
+// injection can never reach on its own (Windows deliberately blocks
+// synthesized input from raising SAS), so a client stuck looking at that
+// prompt after the target locked has no way to actually get to the
+// password field without this. Windows-only; every other platform's
+// sasinput implementation just returns an error (there's no equivalent
+// concept to raise).
+func (a *App) SendSAS() error {
+	return sasinput.SendSecureAttentionSequence()
 }
 
 // RestartSunshine stops and relaunches the bundled Sunshine instance (if the

@@ -701,6 +701,18 @@ func (b *sunshineBackend) Stop() error {
 	if b.proc != nil {
 		log.Printf("[sunshine] stopping pid=%d", b.proc.Pid())
 		err = b.proc.Kill()
+		if err != nil && isAccessDenied(err) {
+			// See rustshine_backend.go's Stop() for why: our handle lacks
+			// PROCESS_TERMINATE, most likely because sunshine.exe is
+			// running with higher privilege than the agent has right now.
+			// Ask Windows to prompt for elevation (UAC) and retry through
+			// that instead of silently leaving it running.
+			if elevErr := elevatedKillByPID(b.proc.Pid()); elevErr != nil {
+				log.Printf("[sunshine] elevated kill also failed: %v", elevErr)
+			} else {
+				err = nil
+			}
+		}
 		b.proc = nil
 	}
 	if b.watchdog != nil && b.watchdog.Process != nil {

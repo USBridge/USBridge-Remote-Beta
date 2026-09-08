@@ -755,11 +755,28 @@ func (b *rustshineBackend) Stop() error {
 	if b.proc != nil {
 		log.Printf("[rustshine] stopping pid=%d", b.proc.Pid())
 		err = b.proc.Kill()
+		if err != nil && isAccessDenied(err) {
+			// Our own handle lacks PROCESS_TERMINATE -- most likely
+			// gamestream-server.exe is running with higher privilege than
+			// the agent has right now. Ask Windows to prompt for
+			// elevation (UAC) and retry through that, instead of silently
+			// leaving a process the user can see is broken running
+			// forever with no explanation. See elevate_windows.go.
+			if elevErr := elevatedKillByPID(b.proc.Pid()); elevErr != nil {
+				log.Printf("[rustshine] elevated kill also failed: %v", elevErr)
+			} else {
+				err = nil
+			}
+		}
 		b.proc = nil
 	} else {
 		log.Printf("[rustshine] stopping orphaned process by name")
 		if runtime.GOOS == "windows" {
-			_ = exec.Command("taskkill", "/F", "/IM", "gamestream-server.exe").Run()
+			if killErr := exec.Command("taskkill", "/F", "/IM", "gamestream-server.exe").Run(); killErr != nil {
+				if elevErr := elevatedKillByName("gamestream-server.exe"); elevErr != nil {
+					log.Printf("[rustshine] elevated kill of orphaned gamestream-server.exe also failed: %v", elevErr)
+				}
+			}
 		} else {
 			_ = exec.Command("killall", "gamestream-server").Run()
 		}

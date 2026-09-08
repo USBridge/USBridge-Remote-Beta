@@ -525,6 +525,26 @@ func (b *rustshineBackend) Start(adminPort int) error {
 	if b.webrtcDisabled {
 		args = append(args, "--webrtc-disable")
 	}
+	// Reed-Solomon FEC redundancy for the video stream. Left unset before
+	// this, gamestream-server just used its own --fec-percentage default
+	// (20%) with no headroom -- confirmed live over a real Wi-Fi link:
+	// repeated "Unrecoverable frame N: X+Y=Z received < W needed" storms
+	// (each one forcing a full client reconnect after ~4s of no frames)
+	// that Sunshine, given the exact same client ANNOUNCE, didn't hit.
+	// Our moonlight-common-c fork's SDP generator only sends an explicit
+	// x-nv-vqos[0].fec.repairPercent on GFE's legacy protocol branch (see
+	// SdpGenerator.c addGen5Options) -- against a server that spoofs a
+	// modern AppVersion (both our backends do, to match Sunshine's real
+	// one), the client sends bllFec.enable=0 and no repair percent at
+	// all, counting on the server to dynamically adjust FEC the way real
+	// GFE/Sunshine's BLL-FEC does. gamestream-server doesn't implement
+	// that dynamic adjustment, so it just falls back to its flat
+	// --fec-percentage the whole time -- unlike Sunshine, there's no
+	// per-frame adaptation to lean on, so its static value needs its own
+	// safety margin instead. 30% costs more bandwidth per frame but
+	// trades that for not needing a full IDR-reconnect cycle every time
+	// a burst of loss exceeds the redundancy budget.
+	args = append(args, "--fec-percentage", "30")
 
 	launchDir := filepath.Dir(launchPath)
 

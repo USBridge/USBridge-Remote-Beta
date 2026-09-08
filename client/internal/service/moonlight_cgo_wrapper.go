@@ -501,9 +501,62 @@ func (w *MoonlightCgoWrapper) NegotiatedVideoCodecName() (string, bool) {
 	return videoFormatCodecName(negotiatedVideoFormat.Load())
 }
 
+// vtLogThrottleWindow bounds how often an *identical, consecutive* Limelog
+// message actually reaches logrus -- see goVTLog's own doc comment for why
+// this exists at all. 250ms is short enough that a real burst still shows
+// up promptly (the first occurrence of any new message logs immediately,
+// unthrottled) and long enough to collapse the kind of tight loop a real
+// loss storm produces (confirmed live: "Waiting for IDR frame" logged over
+// 150 times inside a ~2s stretch) down to about one line every 250ms
+// instead of one per occurrence.
+const vtLogThrottleWindow = 250 * time.Millisecond
+
+var (
+	vtLogMu      sync.Mutex
+	vtLogLastMsg string
+	vtLogRepeat  int
+	vtLogWinFrom time.Time
+)
+
+// goVTLog is moonlight-common-c's single Limelog() entry point on every
+// platform (called via ListenerCallbacks.logMessage, Platform.h's Limelog
+// macro) -- every one of the "Waiting for IDR frame"/"Waiting for RFI
+// frame"/"Invalidate reference frame request sent" lines seen during a real
+// loss burst comes through here, often dozens to hundreds of times within a
+// second or two while the client keeps retrying against the same ongoing
+// loss. Each call was previously a synchronous logrus.Infof unconditionally
+// -- a real syscall-backed write (see cmd/setupLogging's async writer for
+// the other half of this: even with that in place, the CGO call boundary
+// and string formatting per invocation is waste that serves no one once
+// the message is a byte-for-byte repeat of the one immediately before it.
+//
+// Collapses a run of identical, back-to-back messages into a single
+// logged line once the run ends (a different message arrives) or every
+// vtLogThrottleWindow while it's still ongoing, tagged "(repeated xN)" --
+// the *first* occurrence of any message always logs immediately, so a
+// genuinely new/rare event is never delayed or hidden by this.
+//
 //export goVTLog
 func goVTLog(msg *C.char) {
-	logrus.Infof("🎬 [Moonlight/HW] %s", C.GoString(msg))
+	s := C.GoString(msg)
+	now := time.Now()
+
+	vtLogMu.Lock()
+	if s == vtLogLastMsg && now.Sub(vtLogWinFrom) < vtLogThrottleWindow {
+		vtLogRepeat++
+		vtLogMu.Unlock()
+		return
+	}
+	prevMsg, prevRepeat := vtLogLastMsg, vtLogRepeat
+	vtLogLastMsg = s
+	vtLogRepeat = 1
+	vtLogWinFrom = now
+	vtLogMu.Unlock()
+
+	if prevRepeat > 1 {
+		logrus.Infof("🎬 [Moonlight/HW] %s (repeated x%d)", prevMsg, prevRepeat)
+	}
+	logrus.Infof("🎬 [Moonlight/HW] %s", s)
 }
 
 // goAIVisionOverlay is the cgo entry point for the AI Vision live overlay

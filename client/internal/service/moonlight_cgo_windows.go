@@ -486,7 +486,11 @@ static int do_li_start(
     DECODER_RENDERER_CALLBACKS dr; LiInitializeVideoCallbacks(&dr);
     dr.setup = dr_setup; dr.start = dr_start; dr.stop = dr_stop;
     dr.cleanup = dr_cleanup; dr.submitDecodeUnit = dr_submit;
-    dr.capabilities = CAPABILITY_DIRECT_SUBMIT;
+    // See moonlight_cgo_shared.h's identical assignment for why the RFI
+    // bits are added here too -- both sides (host DESCRIBE flag + this
+    // capability bit) are required before moonlight-common-c actually uses
+    // reference-frame-invalidation recovery instead of a full IDR request.
+    dr.capabilities = CAPABILITY_DIRECT_SUBMIT | CAPABILITY_REFERENCE_FRAME_INVALIDATION_AVC | CAPABILITY_REFERENCE_FRAME_INVALIDATION_HEVC | CAPABILITY_REFERENCE_FRAME_INVALIDATION_AV1;
 
     AUDIO_RENDERER_CALLBACKS ar; LiInitializeAudioCallbacks(&ar);
     ar.init = ar_init; ar.start = ar_start; ar.stop = ar_stop;

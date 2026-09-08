@@ -19,7 +19,9 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/layout"
+	"fyne.io/fyne/v2/widget"
 )
 
 // connectionsHeaderSideMargin is the shared left/right margin for both the
@@ -95,6 +97,10 @@ type connectionsHeaderActions struct {
 	// OnViewModeChange fires with "list" or "grid" when the Grid/List toggle
 	// is tapped -- see ConnectionManagerUI.setViewMode.
 	OnViewModeChange func(mode string)
+	// OnSortToggle fires with "kvm", "agent", or "" (tapping the already-
+	// active badge turns it back off) when a KVM/Agent count badge is
+	// tapped -- see ConnectionManager.handleConnectionSortToggle.
+	OnSortToggle func(kind string)
 }
 
 // connectionsHeaderButtons holds the header's own action button instances,
@@ -132,9 +138,25 @@ const connectionsHeaderSubtitle = "Your active remote desktop and hardware contr
 // list (populated or empty): section title + subtitle + category-count
 // badges on the left, view-mode toggle + Add/QR/paste-link actions on the
 // right, thin accent line along the bottom. Returns the button instances
-// too, for SetActionButtonsDisabled.
-func newConnectionsHeader(summary ConnectionsSummary, actions connectionsHeaderActions, viewMode string) (fyne.CanvasObject, *connectionsHeaderButtons) {
+// too, for SetActionButtonsDisabled. activeSort ("", "kvm", or "agent")
+// says which count badge (if any) is currently pressed/highlighted -- see
+// ConnectionManagerUI.activeSort.
+func newConnectionsHeader(summary ConnectionsSummary, actions connectionsHeaderActions, viewMode string, activeSort string) (fyne.CanvasObject, *connectionsHeaderButtons) {
 	title := NewBrandText(strings.TrimSpace(i18n.Current.SavedConnections), 18, design.ColorConnectionsSectionTitle, true)
+
+	// toggleSort returns kind's own tap handler: tapping the already-active
+	// badge turns sorting back off (empty kind) instead of re-applying it.
+	toggleSort := func(kind string) func() {
+		return func() {
+			next := kind
+			if activeSort == kind {
+				next = ""
+			}
+			if actions.OnSortToggle != nil {
+				actions.OnSortToggle(next)
+			}
+		}
+	}
 
 	// container.NewHBox stretches every child to the row's full height (the
 	// tallest child's), which would otherwise blow the badges up to the
@@ -144,10 +166,14 @@ func newConnectionsHeader(summary ConnectionsSummary, actions connectionsHeaderA
 	titleGap.SetMinSize(fyne.NewSize(10, 1))
 	titleItems := []fyne.CanvasObject{container.NewCenter(title), titleGap}
 	if summary.AgentCount > 0 || alwaysShowConnectionsBadges {
-		titleItems = append(titleItems, container.NewCenter(newConnectionCountBadge(fmt.Sprintf("%d Agent", summary.AgentCount))))
+		titleItems = append(titleItems, container.NewCenter(newConnectionSortBadge(
+			fmt.Sprintf("%d Agent", summary.AgentCount), design.ColorConnectionBadgeText,
+			activeSort == "agent", toggleSort("agent"))))
 	}
 	if summary.KVMCount > 0 || alwaysShowConnectionsBadges {
-		titleItems = append(titleItems, container.NewCenter(newConnectionCountBadge(fmt.Sprintf("%d KVM", summary.KVMCount))))
+		titleItems = append(titleItems, container.NewCenter(newConnectionSortBadge(
+			fmt.Sprintf("%d KVM", summary.KVMCount), design.ColorConnectionAddFill,
+			activeSort == "kvm", toggleSort("kvm"))))
 	}
 	titleRow := container.NewHBox(titleItems...)
 
@@ -213,25 +239,94 @@ func newConnectionsHeader(summary ConnectionsSummary, actions connectionsHeaderA
 	return NewInset(content, connectionsHeaderSideMargin, connectionsHeaderSideMargin, 8, 0), &connectionsHeaderButtons{add: addBtn}
 }
 
-// newConnectionCountBadge renders one small pill badge (e.g. "2 Agent") --
-// deliberately hint-sized (short, small text), not button-sized: thin
-// border, solid fill, text -- three independent colors (see
-// design.ColorConnectionBadge{Border,Fill,Text}'s doc comment).
-func newConnectionCountBadge(text string) fyne.CanvasObject {
-	label := canvas.NewText(text, design.ColorConnectionBadgeText)
-	label.TextSize = 8
-	label.TextStyle = fyne.TextStyle{Bold: true}
+// connectionSortBadge is one small pill badge (e.g. "2 Agent") that also
+// works as this category's sort toggle -- deliberately hint-sized (short,
+// small text), not button-sized. Inactive keeps the header's original
+// look: dark fill, thin border, text in the category's own accent color
+// (see design.ColorConnectionBadge{Border,Fill,Text}'s doc comment).
+// active swaps that for a solid fill in the category's accent color with
+// dark text -- the same "lit up" treatment Save/Apply/Connect already use
+// for their own pressed states.
+type connectionSortBadge struct {
+	widget.BaseWidget
 
-	bg := canvas.NewRectangle(design.ColorConnectionBadgeFill)
+	labelText string
+	accent    color.Color
+	active    bool
+	hovered   bool
+	onTapped  func()
+
+	bg    *canvas.Rectangle
+	label *canvas.Text
+}
+
+func newConnectionSortBadge(text string, accent color.Color, active bool, onTapped func()) *connectionSortBadge {
+	b := &connectionSortBadge{labelText: text, accent: accent, active: active, onTapped: onTapped}
+	b.ExtendBaseWidget(b)
+	return b
+}
+
+func (b *connectionSortBadge) CreateRenderer() fyne.WidgetRenderer {
+	b.bg = canvas.NewRectangle(design.ColorConnectionBadgeFill)
 	// A radius bigger than the badge could ever be tall just guarantees a
 	// full pill (fully rounded ends) regardless of exactly how the text
 	// measures, rather than tuning this to match one specific height.
-	bg.CornerRadius = 20
-	bg.StrokeColor = design.ColorConnectionBadgeBorder
-	bg.StrokeWidth = 1
+	b.bg.CornerRadius = 20
+	b.bg.StrokeColor = design.ColorConnectionBadgeBorder
+	b.bg.StrokeWidth = 1
 
-	content := NewInset(container.NewCenter(label), 8, 8, 1, 1)
-	return container.NewStack(bg, content)
+	b.label = canvas.NewText(b.labelText, b.accent)
+	b.label.TextSize = 8
+	b.label.TextStyle = fyne.TextStyle{Bold: true}
+
+	b.refreshVisuals()
+	content := NewInset(container.NewCenter(b.label), 8, 8, 1, 1)
+	return widget.NewSimpleRenderer(container.NewStack(b.bg, content))
+}
+
+func (b *connectionSortBadge) refreshVisuals() {
+	if b.bg == nil {
+		return
+	}
+	if b.active {
+		b.bg.FillColor = b.accent
+		b.bg.StrokeColor = color.Transparent
+		b.label.Color = design.ColorGray950
+	} else {
+		fill := color.Color(design.ColorConnectionBadgeFill)
+		if b.hovered {
+			fill = design.ColorSurfaceLight
+		}
+		b.bg.FillColor = fill
+		b.bg.StrokeColor = design.ColorConnectionBadgeBorder
+		b.label.Color = b.accent
+	}
+	b.bg.Refresh()
+	b.label.Refresh()
+}
+
+func (b *connectionSortBadge) Tapped(*fyne.PointEvent) {
+	if b.onTapped != nil {
+		b.onTapped()
+	}
+}
+
+func (b *connectionSortBadge) TappedSecondary(*fyne.PointEvent) {}
+
+func (b *connectionSortBadge) Cursor() desktop.Cursor {
+	return desktop.PointerCursor
+}
+
+func (b *connectionSortBadge) MouseIn(*desktop.MouseEvent) {
+	b.hovered = true
+	b.refreshVisuals()
+}
+
+func (b *connectionSortBadge) MouseMoved(*desktop.MouseEvent) {}
+
+func (b *connectionSortBadge) MouseOut() {
+	b.hovered = false
+	b.refreshVisuals()
 }
 
 // connectionsViewModeToggle is the small "Grid | List" pair before the Add

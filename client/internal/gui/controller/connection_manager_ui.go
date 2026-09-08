@@ -2,6 +2,7 @@ package controller
 
 import (
 	"runtime"
+	"sort"
 	"strings"
 
 	"usbridge-client/internal/gui/view"
@@ -18,6 +19,7 @@ func (cm *ConnectionManager) createInterface() {
 		cm.openInfoPage,
 		cm.openHardwarePromo,
 		cm.handlePasteLink,
+		cm.handleConnectionSortToggle,
 	)
 	cm.refreshConnectionsList()
 	cm.initTailscaleMode()
@@ -123,12 +125,15 @@ func (cm *ConnectionManager) refreshConnectionsList() {
 		return
 	}
 
+	order := cm.connectionsDisplayOrder()
+
 	rows := make([]view.ConnectionListItem, 0, len(cm.connections))
 	cards := make([]fyne.CanvasObject, 0, len(cm.connections))
 	remoteOSValues := make([]string, 0, len(cm.connections))
-	for i, conn := range cm.connections {
-		rows = append(rows, cm.createConnectionRow(conn, i))
-		cards = append(cards, cm.createConnectionGridCard(conn, i))
+	for _, idx := range order {
+		conn := cm.connections[idx]
+		rows = append(rows, cm.createConnectionRow(conn, idx))
+		cards = append(cards, cm.createConnectionGridCard(conn, idx))
 		remoteOSValues = append(remoteOSValues, conn.RemoteOS)
 	}
 	// Grid mode only -- rows (List) has no equivalent tile, so this is only
@@ -138,11 +143,59 @@ func (cm *ConnectionManager) refreshConnectionsList() {
 	editIndex := -1
 	var editPanel fyne.CanvasObject
 	if cm.editingListIndex >= 0 && cm.editingListIndex < len(cm.connections) {
-		editIndex = cm.editingListIndex
+		// editIndex is a position in the (possibly reordered) rows slice,
+		// not a cm.connections index -- NewConnectionsListSplit highlights
+		// rows[editIndex], so it has to point at wherever editingListIndex's
+		// connection actually landed in this render's display order.
+		for pos, idx := range order {
+			if idx == cm.editingListIndex {
+				editIndex = pos
+				break
+			}
+		}
 		editPanel = cm.buildListEditPanel(cm.editingListIndex)
 	}
 	cm.ui.SetRows(rows, cards, view.SummarizeConnections(remoteOSValues), editIndex, editPanel)
 	cm.notifyConnectionsState()
+}
+
+// connectionsDisplayOrder returns cm.connections' indices in the order the
+// List/Grid should render them: unchanged (creation-date order) by default,
+// or with the KVM (or Agent) connections stably moved to the front when the
+// connections header's matching badge is active (connectionSortMode) --
+// nothing is hidden, only reordered, and each group keeps its own original
+// relative order (sort.SliceStable).
+func (cm *ConnectionManager) connectionsDisplayOrder() []int {
+	order := make([]int, len(cm.connections))
+	for i := range order {
+		order[i] = i
+	}
+	if cm.connectionSortMode == "" {
+		return order
+	}
+
+	wantKVM := cm.connectionSortMode == "kvm"
+	rank := func(idx int) int {
+		isAgent, isKVM := view.ClassifyConnectionRemoteOS(cm.connections[idx].RemoteOS)
+		if (wantKVM && isKVM) || (!wantKVM && isAgent) {
+			return 0
+		}
+		return 1
+	}
+	sort.SliceStable(order, func(i, j int) bool {
+		return rank(order[i]) < rank(order[j])
+	})
+	return order
+}
+
+// handleConnectionSortToggle is the connections header's KVM/Agent badge tap
+// callback (connectionsHeaderActions.OnSortToggle). kind is "kvm", "agent",
+// or "" -- tapping the already-active badge turns it back off (view.
+// newConnectionsHeader computes that toggle), reverting to plain
+// creation-date order.
+func (cm *ConnectionManager) handleConnectionSortToggle(kind string) {
+	cm.connectionSortMode = kind
+	cm.refreshConnectionsList()
 }
 
 func (cm *ConnectionManager) createConnectionRow(conn SavedConnection, idx int) view.ConnectionListItem {

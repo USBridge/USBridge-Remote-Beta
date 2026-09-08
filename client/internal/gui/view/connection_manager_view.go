@@ -52,6 +52,14 @@ type ConnectionManagerUI struct {
 	lastSummary ConnectionsSummary
 	hasRows     bool
 
+	// activeSort mirrors viewMode for the header's KVM/Agent count badges:
+	// "" (default), "kvm", or "agent" -- which one (if any) is currently
+	// pressed/highlighted. Persists across SetRows re-renders the same way
+	// viewMode does; the actual reordering happens controller-side
+	// (ConnectionManager.connectionsDisplayOrder), this just remembers which
+	// badge to draw as active on the next header rebuild.
+	activeSort string
+
 	// editPanel, when non-nil, switches List mode into its split-edit
 	// layout (NewConnectionsListSplit) instead of the plain table
 	// (NewConnectionsListTable) -- see SetRows. editIndex is the lastRows
@@ -312,7 +320,7 @@ func (l *DeviceNameRowLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
 
 var connectionActionBlockedFill = design.ColorGray900
 
-func NewConnectionManagerUI(onQR func(), onAdd func(), onHelp func(), onPromo func(), onPasteLink func()) *ConnectionManagerUI {
+func NewConnectionManagerUI(onQR func(), onAdd func(), onHelp func(), onPromo func(), onPasteLink func(), onSortToggle func(kind string)) *ConnectionManagerUI {
 	connectionsBox := container.NewVBox()
 	// Side margins match connectionsHeaderSideMargin (the section header
 	// above) so List rows/Grid cards line up with the header's own edges
@@ -356,6 +364,12 @@ func NewConnectionManagerUI(onQR func(), onAdd func(), onHelp func(), onPromo fu
 		OnQR:             onQR,
 		OnPasteLink:      onPasteLink,
 		OnViewModeChange: ui.setViewMode,
+		OnSortToggle: func(kind string) {
+			ui.activeSort = kind
+			if onSortToggle != nil {
+				onSortToggle(kind)
+			}
+		},
 	}
 	ui.contentArea.Objects = []fyne.CanvasObject{
 		layout.NewSpacer(),
@@ -417,7 +431,7 @@ func (ui *ConnectionManagerUI) SetEmptyState() {
 
 	// No connections to count -- zero-valued ConnectionsSummary renders no
 	// badges.
-	header, buttons := newConnectionsHeader(ConnectionsSummary{}, ui.headerActions, ui.viewMode)
+	header, buttons := newConnectionsHeader(ConnectionsSummary{}, ui.headerActions, ui.viewMode, ui.activeSort)
 	ui.headerButtons = buttons
 
 	spacer := canvas.NewRectangle(color.Transparent)
@@ -677,7 +691,7 @@ func (ui *ConnectionManagerUI) SetRows(rows []ConnectionListItem, cards []fyne.C
 	ui.editIndex = editIndex
 	ui.applyConnectionsContent()
 
-	header, buttons := newConnectionsHeader(summary, ui.headerActions, ui.viewMode)
+	header, buttons := newConnectionsHeader(summary, ui.headerActions, ui.viewMode, ui.activeSort)
 	ui.headerButtons = buttons
 
 	ui.contentArea.Objects = []fyne.CanvasObject{

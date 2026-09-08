@@ -1924,6 +1924,21 @@ func (a *App) stopRustShineForUpdate() bool {
 	}
 	log.Printf("[app] stopping rustshine before staging update (Windows can't replace a running .exe)")
 	_ = a.stream.Stop()
+	// Stop() only kills the single instance this backend struct is tracking
+	// (b.proc) -- confirmed live as insufficient on its own: a manual
+	// StageRustShine run against a completely clean process list (zero
+	// gamestream-server.exe alive) staged and renamed in ~1.3s every time,
+	// while the exact same call from this update flow kept losing to
+	// "Access is denied" for the *entire* 20s renameWithRetry budget,
+	// despite Stop() reporting its tracked pid gone in milliseconds --
+	// meaning some second, untracked gamestream-server.exe instance (this
+	// backend struct never learned about it, so Stop() had nothing to kill
+	// it with) was the one actually holding the file open. Root cause of
+	// that second instance's existence not fully pinned down; this sweeps
+	// unconditionally by name as a belt-and-suspenders guarantee that
+	// nothing named gamestream-server.exe survives this point, regardless
+	// of how it got there or whether this backend ever tracked it.
+	_ = exec.Command("taskkill", "/F", "/IM", "gamestream-server.exe").Run()
 	// Stop() only signals termination; give the OS a moment to actually
 	// release the exe's image-section file lock before the upcoming rename.
 	time.Sleep(500 * time.Millisecond)

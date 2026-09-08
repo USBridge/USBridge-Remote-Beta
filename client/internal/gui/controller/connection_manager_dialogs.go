@@ -2096,8 +2096,10 @@ func (cm *ConnectionManager) handleDeleteConnection(idx int, afterDelete func())
 	}
 	deletedName := cm.connections[idx].Name
 
-	view.ShowConfirmYesLeft(
-		i18n.Current.DeleteConnectionTitle,
+	// Small bottom-center toast instead of a full dimmed modal -- deleting a
+	// connection is a light, frequent-enough action that a heavier "Are you
+	// sure?" popup with its own title bar felt like overkill.
+	view.ShowConfirmToast(
 		fmt.Sprintf(i18n.Current.DeleteConnectionConfirm, deletedName),
 		func(confirmed bool) {
 			if !confirmed {

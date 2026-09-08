@@ -121,13 +121,23 @@ func (mw *MainWindow) showAccountDialog() {
 
 		switch {
 		case am.LoginInProgress():
-			body.Add(widget.NewLabel("Waiting for Google login to complete in your browser..."))
-			body.Add(widget.NewProgressBarInfinite())
-			cancelBtn := widget.NewButton("Cancel", func() {
+			lbl := widget.NewLabel("Waiting for Google login to complete in your browser...")
+			lbl.Wrapping = fyne.TextWrapWord
+			lbl.Alignment = fyne.TextAlignCenter
+			styledLbl := wrapAccountField(lbl, 12, color.NRGBA{R: 0xc5, G: 0xc8, B: 0xb5, A: 0xff})
+			body.Add(styledLbl)
+
+			prog := widget.NewProgressBarInfinite()
+			styledProg := container.NewThemeOverride(prog, &progressTheme{Theme: theme.DefaultTheme()})
+			progContainer := container.New(&fixedHeightLayout{height: 5}, styledProg)
+
+			// Add some padding above and below the progress bar
+			body.Add(view.NewInset(progContainer, 0, 0, 8, 4))
+
+			cancelBtn := newAccountDialogTextButton("Cancel", func() {
 				am.CancelLogin()
 				render()
 			})
-			cancelBtn.Importance = widget.LowImportance
 			body.Add(container.NewCenter(cancelBtn))
 
 		case am.LoggedIn():
@@ -241,6 +251,9 @@ func (mw *MainWindow) showAccountDialog() {
 			if am.LoggedIn() {
 				scroll.Content = view.NewInset(body, 21, 21, 14, 18)
 				scroll.SetMinSize(fyne.NewSize(0, 200))
+			} else if am.LoginInProgress() {
+				scroll.Content = view.NewInset(body, 21, 21, 2, 6)
+				scroll.SetMinSize(fyne.NewSize(0, 110))
 			} else {
 				scroll.Content = view.NewInset(body, 21, 21, 2, 12)
 				scroll.SetMinSize(fyne.NewSize(0, 110)) // completely tight
@@ -277,6 +290,9 @@ func (mw *MainWindow) showAccountDialog() {
 	if am.LoggedIn() {
 		scroll = container.NewVScroll(view.NewInset(body, 21, 21, 14, 18))
 		scroll.SetMinSize(fyne.NewSize(0, 200))
+	} else if am.LoginInProgress() {
+		scroll = container.NewVScroll(view.NewInset(body, 21, 21, 2, 6))
+		scroll.SetMinSize(fyne.NewSize(0, 110))
 	} else {
 		scroll = container.NewVScroll(view.NewInset(body, 21, 21, 2, 12))
 		scroll.SetMinSize(fyne.NewSize(0, 110))
@@ -575,6 +591,55 @@ func renderLicenses(licenses []account.License, err error, window fyne.Window) f
 // deliberately overwrites the account's synced data instead of merging
 // with it, since nothing can decrypt the old blob anymore once its
 // passphrase is forgotten).
+type progressTheme struct {
+	fyne.Theme
+}
+
+func (t *progressTheme) Color(name fyne.ThemeColorName, v fyne.ThemeVariant) color.Color {
+	if name == theme.ColorNamePrimary {
+		return color.NRGBA{R: 0x41, G: 0xe0, B: 0xc3, A: 0xff} // Slider color
+	}
+	if name == theme.ColorNameInputBackground || name == theme.ColorNameButton || name == theme.ColorNameScrollBarBackground {
+		return color.NRGBA{R: 0x2e, G: 0x9e, B: 0x8a, A: 0xff} // Background color
+	}
+	return t.Theme.Color(name, v)
+}
+
+func (t *progressTheme) Size(name fyne.ThemeSizeName) float32 {
+	if strings.HasSuffix(string(name), "Radius") {
+		return 3 // smaller radius for the 5px bar
+	}
+	return t.Theme.Size(name)
+}
+
+type fixedHeightLayout struct {
+	height float32
+}
+
+func (l *fixedHeightLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	var size fyne.Size
+	for _, o := range objects {
+		if !o.Visible() {
+			continue
+		}
+		if size.Width < o.MinSize().Width {
+			size.Width = o.MinSize().Width
+		}
+	}
+	size.Height = l.height
+	return size
+}
+
+func (l *fixedHeightLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	for _, o := range objects {
+		if !o.Visible() {
+			continue
+		}
+		o.Resize(fyne.NewSize(size.Width, l.height))
+		o.Move(fyne.NewPos(0, 0))
+	}
+}
+
 type tightVBoxLayout struct{}
 
 func (t *tightVBoxLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {

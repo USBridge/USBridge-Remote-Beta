@@ -18,6 +18,7 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
 
@@ -283,10 +284,10 @@ func (b *accountDialogLinkButton) refreshVisuals() {
 	b.line.Refresh()
 }
 
-// accountDialogLogoutButton is the "Log out" footer button: a small
-// bordered chip with an icon + label that swaps to a red hover state.
-type accountDialogLogoutButton struct {
+// accountDialogDarkButton is a small bordered chip (like "Log out" or "Reset").
+type accountDialogDarkButton struct {
 	widget.BaseWidget
+	text     string
 	onTapped func()
 	hovered  bool
 
@@ -299,17 +300,18 @@ type accountDialogLogoutButton struct {
 	lbl  *canvas.Text
 }
 
-func newAccountDialogLogoutButton(onTapped func()) *accountDialogLogoutButton {
-	b := &accountDialogLogoutButton{
+func newAccountDialogDarkButton(text string, iconNormal, iconHover fyne.Resource, onTapped func()) *accountDialogDarkButton {
+	b := &accountDialogDarkButton{
+		text:       text,
 		onTapped:   onTapped,
-		iconNormal: fyne.NewStaticResource("logout.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#e0e3e7"><path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/></svg>`)),
-		iconHover:  fyne.NewStaticResource("logout_hover.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#ed6b7f"><path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/></svg>`)),
+		iconNormal: iconNormal,
+		iconHover:  iconHover,
 	}
 	b.ExtendBaseWidget(b)
 	return b
 }
 
-func (b *accountDialogLogoutButton) CreateRenderer() fyne.WidgetRenderer {
+func (b *accountDialogDarkButton) CreateRenderer() fyne.WidgetRenderer {
 	b.bg = canvas.NewRectangle(color.NRGBA{R: 0x23, G: 0x27, B: 0x2a, A: 0xff})
 	b.bg.CornerRadius = 6
 
@@ -318,48 +320,53 @@ func (b *accountDialogLogoutButton) CreateRenderer() fyne.WidgetRenderer {
 	b.bdr.StrokeColor = color.NRGBA{R: 0x44, G: 0x48, B: 0x39, A: 0xff}
 	b.bdr.CornerRadius = 6
 
-	b.icon = canvas.NewImageFromResource(b.iconNormal)
-	b.icon.SetMinSize(fyne.NewSize(14, 14))
-	b.icon.FillMode = canvas.ImageFillContain
-
-	b.lbl = canvas.NewText("Log out", color.NRGBA{R: 0xe0, G: 0xe3, B: 0xe7, A: 0xff})
+	b.lbl = canvas.NewText(b.text, color.NRGBA{R: 0xe0, G: 0xe3, B: 0xe7, A: 0xff})
 	b.lbl.TextSize = 11
 	b.lbl.TextStyle = fyne.TextStyle{Bold: true}
 
-	content := container.NewHBox(b.icon, b.lbl)
+	var content *fyne.Container
+	if b.iconNormal != nil {
+		b.icon = canvas.NewImageFromResource(b.iconNormal)
+		b.icon.SetMinSize(fyne.NewSize(14, 14))
+		b.icon.FillMode = canvas.ImageFillContain
+		content = container.NewHBox(b.icon, b.lbl)
+	} else {
+		content = container.NewHBox(b.lbl)
+	}
+
 	return widget.NewSimpleRenderer(container.NewStack(b.bg, b.bdr, view.NewInset(content, 12, 12, 3, 3)))
 }
 
-func (b *accountDialogLogoutButton) MinSize() fyne.Size {
+func (b *accountDialogDarkButton) MinSize() fyne.Size {
 	b.ExtendBaseWidget(b)
 	return b.BaseWidget.MinSize()
 }
 
-func (b *accountDialogLogoutButton) Tapped(*fyne.PointEvent) {
+func (b *accountDialogDarkButton) Tapped(*fyne.PointEvent) {
 	if b.onTapped != nil {
 		b.onTapped()
 	}
 }
 
-func (b *accountDialogLogoutButton) TappedSecondary(*fyne.PointEvent) {}
+func (b *accountDialogDarkButton) TappedSecondary(*fyne.PointEvent) {}
 
-func (b *accountDialogLogoutButton) Cursor() desktop.Cursor {
+func (b *accountDialogDarkButton) Cursor() desktop.Cursor {
 	return desktop.PointerCursor
 }
 
-func (b *accountDialogLogoutButton) MouseIn(*desktop.MouseEvent) {
+func (b *accountDialogDarkButton) MouseIn(*desktop.MouseEvent) {
 	b.hovered = true
 	b.refreshVisuals()
 }
 
-func (b *accountDialogLogoutButton) MouseMoved(*desktop.MouseEvent) {}
+func (b *accountDialogDarkButton) MouseMoved(*desktop.MouseEvent) {}
 
-func (b *accountDialogLogoutButton) MouseOut() {
+func (b *accountDialogDarkButton) MouseOut() {
 	b.hovered = false
 	b.refreshVisuals()
 }
 
-func (b *accountDialogLogoutButton) refreshVisuals() {
+func (b *accountDialogDarkButton) refreshVisuals() {
 	if b.bg == nil {
 		return
 	}
@@ -367,15 +374,136 @@ func (b *accountDialogLogoutButton) refreshVisuals() {
 		b.bg.FillColor = color.NRGBA{R: 0x1d, G: 0x13, B: 0x1b, A: 0xff}
 		b.bdr.StrokeColor = color.NRGBA{R: 0x4e, G: 0x13, B: 0x28, A: 0xff}
 		b.lbl.Color = color.NRGBA{R: 0xed, G: 0x6b, B: 0x7f, A: 0xff}
-		b.icon.Resource = b.iconHover
+		if b.icon != nil && b.iconHover != nil {
+			b.icon.Resource = b.iconHover
+		}
 	} else {
 		b.bg.FillColor = color.NRGBA{R: 0x23, G: 0x27, B: 0x2a, A: 0xff}
 		b.bdr.StrokeColor = color.NRGBA{R: 0x44, G: 0x48, B: 0x39, A: 0xff}
 		b.lbl.Color = color.NRGBA{R: 0xe0, G: 0xe3, B: 0xe7, A: 0xff}
-		b.icon.Resource = b.iconNormal
+		if b.icon != nil && b.iconNormal != nil {
+			b.icon.Resource = b.iconNormal
+		}
 	}
 	b.bg.Refresh()
 	b.bdr.Refresh()
 	b.lbl.Refresh()
-	b.icon.Refresh()
+	if b.icon != nil {
+		b.icon.Refresh()
+	}
+}
+
+// accountDialogTextButton is a plain text button for "Cancel".
+type accountDialogTextButton struct {
+	widget.BaseWidget
+	text     string
+	onTapped func()
+	hovered  bool
+	lbl      *canvas.Text
+}
+
+func newAccountDialogTextButton(text string, onTapped func()) *accountDialogTextButton {
+	b := &accountDialogTextButton{text: text, onTapped: onTapped}
+	b.ExtendBaseWidget(b)
+	return b
+}
+
+func (b *accountDialogTextButton) CreateRenderer() fyne.WidgetRenderer {
+	b.lbl = canvas.NewText(b.text, design.ColorTextMuted)
+	b.lbl.TextSize = 11
+	b.lbl.TextStyle = fyne.TextStyle{Bold: true}
+	// Add some padding to match heights visually
+	return widget.NewSimpleRenderer(view.NewInset(b.lbl, 8, 8, 3, 3))
+}
+
+func (b *accountDialogTextButton) MinSize() fyne.Size {
+	b.ExtendBaseWidget(b)
+	return b.BaseWidget.MinSize()
+}
+
+func (b *accountDialogTextButton) Tapped(*fyne.PointEvent) {
+	if b.onTapped != nil {
+		b.onTapped()
+	}
+}
+
+func (b *accountDialogTextButton) TappedSecondary(*fyne.PointEvent) {}
+
+func (b *accountDialogTextButton) Cursor() desktop.Cursor {
+	return desktop.PointerCursor
+}
+
+func (b *accountDialogTextButton) MouseIn(*desktop.MouseEvent) {
+	b.hovered = true
+	b.refreshVisuals()
+}
+
+func (b *accountDialogTextButton) MouseMoved(*desktop.MouseEvent) {}
+
+func (b *accountDialogTextButton) MouseOut() {
+	b.hovered = false
+	b.refreshVisuals()
+}
+
+func (b *accountDialogTextButton) refreshVisuals() {
+	if b.lbl == nil {
+		return
+	}
+	if b.hovered {
+		b.lbl.Color = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
+	} else {
+		b.lbl.Color = design.ColorTextMuted
+	}
+	b.lbl.Refresh()
+}
+
+type accountFieldTheme struct {
+	fyne.Theme
+	textSize  float32
+	textColor color.Color
+}
+
+func (t *accountFieldTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
+	switch name {
+	case theme.ColorNameInputBackground:
+		return color.NRGBA{R: 255, G: 255, B: 255, A: 8}
+	case theme.ColorNameFocus:
+		return color.NRGBA{R: 255, G: 255, B: 255, A: 20}
+	case theme.ColorNameInputBorder:
+		return color.NRGBA{R: 0x41, G: 0xe0, B: 0xc3, A: 0x40}
+	case theme.ColorNamePrimary:
+		return design.ColorConnectionBadgeText
+	case theme.ColorNameShadow:
+		return color.Transparent
+	case theme.ColorNameForeground:
+		if t.textColor != nil {
+			return t.textColor
+		}
+		return design.ColorTextLight
+	case theme.ColorNamePlaceHolder:
+		return design.ColorTextMuted
+	}
+	return t.Theme.Color(name, variant)
+}
+
+func (t *accountFieldTheme) Size(name fyne.ThemeSizeName) float32 {
+	switch name {
+	case theme.SizeNameText:
+		return t.textSize
+	case theme.SizeNameInputBorder:
+		return 1
+	case theme.SizeNamePadding:
+		return 2
+	case theme.SizeNameInnerPadding:
+		return 8
+	case theme.SizeNameInputRadius:
+		return 4
+	case theme.SizeNameInlineIcon:
+		return t.textSize * 1.6 // Larger eye icon
+	}
+	return t.Theme.Size(name)
+}
+
+func wrapAccountField(obj fyne.CanvasObject, textSize float32, textColor color.Color) fyne.CanvasObject {
+	return container.NewThemeOverride(obj, &accountFieldTheme{Theme: design.NewBrandTheme(), textSize: textSize, textColor: textColor})
 }

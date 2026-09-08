@@ -77,6 +77,7 @@ func (mw *MainWindow) showAccountDialog() {
 	// call, so anything that must survive across renders lives out here).
 	var resettingSyncPassphrase bool
 
+	var scroll *container.Scroll
 	footerContainer := container.NewStack()
 
 	var render func()
@@ -86,7 +87,7 @@ func (mw *MainWindow) showAccountDialog() {
 
 		switch {
 		case am.LoginInProgress():
-			body.Add(widget.NewLabel("Waiting for Google login to complete in your browser…"))
+			body.Add(widget.NewLabel("Waiting for Google login to complete in your browser..."))
 			body.Add(widget.NewProgressBarInfinite())
 			cancelBtn := widget.NewButton("Cancel", func() {
 				am.CancelLogin()
@@ -96,31 +97,48 @@ func (mw *MainWindow) showAccountDialog() {
 			body.Add(container.NewCenter(cancelBtn))
 
 		case am.LoggedIn():
-			letter := "U"
-			if trimmed := strings.TrimSpace(am.Email()); trimmed != "" {
-				letter = strings.ToUpper(string([]rune(trimmed)[0]))
-			}
-			signedInLabel := canvas.NewText("Signed in as", color.NRGBA{R: 0x8f, G: 0x93, B: 0x81, A: 0xff})
-			signedInLabel.TextSize = 10
 			emailText := canvas.NewText(am.Email(), design.ColorTextLight)
 			emailText.TextSize = 13
 			emailText.TextStyle = fyne.TextStyle{Bold: true}
-			identityHeader := container.NewHBox(
-				newAccountAvatarBadge(letter),
-				view.NewInset(container.NewVBox(signedInLabel, emailText), 10, 0, 0, 0),
-			)
 
-			identityBody := container.NewVBox(identityHeader)
+			var identityHeader fyne.CanvasObject
+			if resettingSyncPassphrase {
+				// Hide avatar and "Signed in as"
+				identityHeader = emailText
+			} else {
+				trimmed := strings.TrimSpace(am.Email())
+				letter := "U"
+				if trimmed != "" {
+					letter = strings.ToUpper(string([]rune(trimmed)[0]))
+				}
+				signedInLabel := canvas.NewText("Signed in as", color.NRGBA{R: 0x8f, G: 0x93, B: 0x81, A: 0xff})
+				signedInLabel.TextSize = 10
+				identityHeader = container.NewHBox(
+					newAccountAvatarBadge(letter),
+					view.NewInset(container.NewVBox(signedInLabel, emailText), 10, 0, 0, 0),
+				)
+			}
+
+			var identityBody *fyne.Container
+			if resettingSyncPassphrase {
+				identityBody = container.New(&tightVBoxLayout{}, identityHeader)
+			} else {
+				identityBody = container.NewVBox(identityHeader)
+			}
+
 			if errMsg := am.LastError(); errMsg != "" {
 				errText := canvas.NewText(errMsg, design.ColorAlert)
 				errText.TextSize = 11
 				identityBody.Add(errText)
 			}
-			identityBody.Add(view.NewInset(newAccountDivider(), 0, 0, 2, 0))
-			identityBody.Add(accountLicensesList(am, &licensesLoaded, &licensesCache, &licensesErr, mw.window, render))
+			if !resettingSyncPassphrase {
+				identityBody.Add(view.NewInset(newAccountDivider(), 0, 0, 2, 0))
+				identityBody.Add(accountLicensesList(am, &licensesLoaded, &licensesCache, &licensesErr, mw.window, render))
+			}
 
 			identityBody.Add(newAccountDivider())
-			identityBody.Add(accountSyncPassphraseSection(cm, am, &resettingSyncPassphrase, render))
+			syncContent, syncFooter := accountSyncPassphraseSection(cm, am, &resettingSyncPassphrase, render)
+			identityBody.Add(syncContent)
 
 			body.Add(newAccountCard(identityBody))
 
@@ -130,9 +148,14 @@ func (mw *MainWindow) showAccountDialog() {
 					resettingSyncPassphrase = true
 					render()
 				})
+			} else if syncFooter != nil {
+				footerLeft = syncFooter
 			}
 
-			logoutBtn := newAccountDialogLogoutButton(func() {
+			logoutIconNormal := fyne.NewStaticResource("logout.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#e0e3e7"><path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/></svg>`))
+			logoutIconHover := fyne.NewStaticResource("logout_hover.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#ed6b7f"><path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/></svg>`))
+
+			logoutBtn := newAccountDialogDarkButton("Log out", logoutIconNormal, logoutIconHover, func() {
 				am.Logout()
 				licensesLoaded = false
 				licensesCache = nil
@@ -141,18 +164,11 @@ func (mw *MainWindow) showAccountDialog() {
 				render()
 			})
 
-			// footerLeft is nil whenever there's no "Forgot passphrase?" link
-			// to show (no sync key yet, or a reset is in progress) --
-			// container.NewCenter does NOT filter nil objects out of its own
-			// Objects slice, so wrapping a nil footerLeft in NewCenter here
-			// would panic the first time CenterLayout.Layout/MinSize calls a
-			// method on that nil entry. Only wrap when there's something to
-			// center; container.NewBorder's own "left" param already treats
-			// nil as "no left edge" safely.
 			var footerLeftCentered fyne.CanvasObject
 			if footerLeft != nil {
 				footerLeftCentered = container.NewCenter(footerLeft)
 			}
+
 			footerBar := container.NewBorder(nil, nil, footerLeftCentered, logoutBtn)
 			footerArea := container.NewVBox(
 				newAccountDivider(),
@@ -164,9 +180,7 @@ func (mw *MainWindow) showAccountDialog() {
 			intro := widget.NewLabel("Log in to see your USBridge licenses and sync your saved connections across devices.")
 			intro.Wrapping = fyne.TextWrapWord
 			body.Add(intro)
-			if errMsg := am.LastError(); errMsg != "" {
-				body.Add(widget.NewLabel(errMsg))
-			}
+
 			loginBtn := widget.NewButton("Log in with Google", func() {
 				if err := am.StartLogin(); err == nil {
 					render()
@@ -174,10 +188,21 @@ func (mw *MainWindow) showAccountDialog() {
 			})
 			loginBtn.Importance = widget.HighImportance
 			body.Add(container.NewCenter(loginBtn))
-		}
 
+			if errMsg := am.LastError(); errMsg != "" {
+				errText := canvas.NewText(errMsg, design.ColorAlert)
+				errText.TextSize = 11
+				body.Add(errText)
+			}
+		}
 		body.Refresh()
 		footerContainer.Refresh()
+
+		if scroll != nil {
+			scroll.Content = view.NewInset(body, 21, 21, 14, 18)
+			scroll.SetMinSize(fyne.NewSize(0, 200))
+			scroll.Refresh()
+		}
 	}
 	render()
 
@@ -205,10 +230,7 @@ func (mw *MainWindow) showAccountDialog() {
 	// below) -- same reasoning as the Add Connection dialog's own header.
 	header := container.NewVBox(topAccent, view.NewInset(title, 21, 44, 9, 4), sep)
 
-	scroll := container.NewVScroll(view.NewInset(body, 21, 21, 14, 18))
-	// Explicit min size -- ScrollVerticalOnly's own MinSize otherwise stays
-	// frozen at whatever was last set (0 here, never set), which would
-	// collapse the dialog to the header's height alone on first layout.
+	scroll = container.NewVScroll(view.NewInset(body, 21, 21, 14, 18))
 	scroll.SetMinSize(fyne.NewSize(0, 195))
 
 	bg := canvas.NewRectangle(design.ColorGray900)
@@ -509,6 +531,9 @@ type tightVBoxLayout struct{}
 func (t *tightVBoxLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
 	var size fyne.Size
 	for _, o := range objects {
+		if !o.Visible() {
+			continue
+		}
 		m := o.MinSize()
 		if m.Width > size.Width {
 			size.Width = m.Width
@@ -521,6 +546,9 @@ func (t *tightVBoxLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
 func (t *tightVBoxLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 	y := float32(0)
 	for _, o := range objects {
+		if !o.Visible() {
+			continue
+		}
 		m := o.MinSize()
 		o.Move(fyne.NewPos(0, y))
 		o.Resize(fyne.NewSize(size.Width, m.Height))
@@ -528,7 +556,7 @@ func (t *tightVBoxLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
 	}
 }
 
-func accountSyncPassphraseSection(cm *controller.ConnectionManager, am *controller.AccountManager, resetting *bool, render func()) fyne.CanvasObject {
+func accountSyncPassphraseSection(cm *controller.ConnectionManager, am *controller.AccountManager, resetting *bool, render func()) (fyne.CanvasObject, fyne.CanvasObject) {
 	titleText := canvas.NewText("Connections sync", design.ColorTextLight)
 	titleText.TextSize = 12
 	titleText.TextStyle = fyne.TextStyle{Bold: true}
@@ -541,7 +569,7 @@ func accountSyncPassphraseSection(cm *controller.ConnectionManager, am *controll
 		desc.TextSize = 8
 		textBlock := container.New(&tightVBoxLayout{}, titleText, desc)
 		shiftedPill := view.NewInset(pill, 0, 0, 2, 0)
-		return view.NewInset(container.NewBorder(nil, nil, nil, container.NewCenter(shiftedPill), textBlock), 0, 0, 4, 0)
+		return view.NewInset(container.NewBorder(nil, nil, nil, container.NewCenter(shiftedPill), textBlock), 0, 0, 4, 0), nil
 	}
 
 	titleRow := container.NewBorder(nil, nil, titleText, view.NewInset(pill, 0, 0, 2, 0))
@@ -553,47 +581,62 @@ func accountSyncPassphraseSection(cm *controller.ConnectionManager, am *controll
 				"permanently unreadable the moment you do this. Enter a new passphrase:",
 		)
 		warn.Wrapping = fyne.TextWrapWord
+		styledWarn := wrapAccountField(warn, 8, color.NRGBA{R: 0x8f, G: 0x93, B: 0x81, A: 0xff})
+
 		entry := widget.NewPasswordEntry()
 		entry.SetPlaceHolder("New sync passphrase")
-		statusLabel := widget.NewLabel("")
+		entry.TextStyle.Monospace = true
+		styledEntry := wrapAccountField(entry, 10, color.NRGBA{R: 0xe9, G: 0xfd, B: 0xbb, A: 0xff})
 
-		resetBtn := widget.NewButton("Reset & overwrite", func() {
+		statusLabel := widget.NewLabel("")
+		statusLabel.Hide()
+
+		var resetBtn, cancelBtn fyne.CanvasObject
+
+		resetBtn = newAccountDialogDarkButton("Reset & overwrite", nil, nil, func() {
 			if entry.Text == "" {
 				return
 			}
-			statusLabel.SetText("Resetting…")
+			statusLabel.SetText("Resetting...")
+			statusLabel.Show()
+			styledEntry.Hide()
+			resetBtn.Hide()
+			cancelBtn.Hide()
+
 			go func() {
 				err := cm.ResetSyncPassphrase(context.Background(), entry.Text)
-				*resetting = false
 				if err != nil {
-					// The new key is already set locally either way (see
-					// ResetSyncPassphrase) -- a failed overwrite here just
-					// means try "Forgot passphrase?" again to retry the
-					// push, not start over from scratch.
 					fyne.Do(func() {
 						statusLabel.SetText(fmt.Sprintf("Reset failed: %v", err))
-						render()
+						styledEntry.Show()
+						resetBtn.Show()
+						cancelBtn.Show()
+						// Do NOT call render() here, it would destroy and recreate the view with an empty label!
 					})
 					return
 				}
+				*resetting = false
 				fyne.Do(render)
 			}()
 		})
-		resetBtn.Importance = widget.DangerImportance
 
-		cancelBtn := widget.NewButton("Cancel", func() {
+		cancelBtn = newAccountDialogTextButton("Cancel", func() {
 			*resetting = false
 			render()
 		})
-		cancelBtn.Importance = widget.LowImportance
 
-		return container.NewVBox(titleRow, warn, entry, statusLabel, container.NewHBox(resetBtn, cancelBtn))
+		return container.New(&tightVBoxLayout{}, titleRow, styledWarn, styledEntry, statusLabel), container.NewHBox(cancelBtn, resetBtn)
 	}
 
 	label := widget.NewLabel("Set a sync passphrase to sync your saved connections across devices (never sent to our servers):")
 	label.Wrapping = fyne.TextWrapWord
+	styledLabel := wrapAccountField(label, 8, color.NRGBA{R: 0x8f, G: 0x93, B: 0x81, A: 0xff})
+
 	entry := widget.NewPasswordEntry()
 	entry.SetPlaceHolder("Sync passphrase")
+	entry.TextStyle.Monospace = true
+	styledEntry := wrapAccountField(entry, 10, color.NRGBA{R: 0xe9, G: 0xfd, B: 0xbb, A: 0xff})
+
 	saveBtn := widget.NewButton("Set passphrase", func() {
 		if entry.Text == "" {
 			return
@@ -601,5 +644,5 @@ func accountSyncPassphraseSection(cm *controller.ConnectionManager, am *controll
 		am.SetSyncPassphrase(entry.Text)
 		render()
 	})
-	return container.NewVBox(titleRow, label, entry, container.NewCenter(saveBtn))
+	return container.NewVBox(titleRow, styledLabel, styledEntry, container.NewCenter(saveBtn)), nil
 }

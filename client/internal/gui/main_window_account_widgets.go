@@ -152,6 +152,25 @@ func newAccountLicenseRow(kind, identifier, status string, window fyne.Window) f
 	return container.NewBorder(nil, nil, nil, copyBtn, left)
 }
 
+// newAccountLicenseSkeletonRow is shown in place of the license list while
+// its very first fetch of this login session is still in flight (see
+// AccountManager.CachedLicenses -- every OTHER dialog open renders the real
+// rows immediately, skipping this entirely). Built from the exact same
+// container.NewBorder(left-text, right-24x24) shape newAccountLicenseRow
+// uses, so its MinSize height matches a real row's (dominated by the
+// 24x24 copy button on the right) instead of a bare text line's -- that
+// height mismatch was what made the dialog visibly resize the moment the
+// fetch resolved and swapped the placeholder for real rows.
+func newAccountLicenseSkeletonRow() fyne.CanvasObject {
+	text := canvas.NewText("Loading your licenses…", design.ColorTextMuted)
+	text.TextSize = 11
+
+	rightSpacer := canvas.NewRectangle(color.Transparent)
+	rightSpacer.SetMinSize(fyne.NewSize(24, 24))
+
+	return container.NewBorder(nil, nil, nil, rightSpacer, text)
+}
+
 type accountDialogLinkButton struct {
 	widget.BaseWidget
 	prefix   string

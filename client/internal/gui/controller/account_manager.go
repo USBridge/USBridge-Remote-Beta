@@ -51,6 +51,18 @@ type AccountManager struct {
 	pollCancel      context.CancelFunc
 	lastError       string
 
+	// licensesCache/licensesCached/licensesErr: the last successful (or
+	// failed) Licenses() fetch for the CURRENT login, kept here rather than
+	// only inside the Account dialog's own closure -- so a re-open of the
+	// dialog within the same login session renders the real license list
+	// immediately, with no "Loading your licenses…" placeholder and no
+	// resulting resize once the fetch resolves (see showAccountDialog,
+	// which used to always start from an empty cache on every open).
+	// Cleared on Logout since it belongs to that login, not the device.
+	licensesCached bool
+	licensesCache  []account.License
+	licensesErr    error
+
 	// onChange notifies the GUI (the top-bar button's icon/badge, an open
 	// account dialog) that something worth re-rendering changed --
 	// deliberately fire-and-forget, called with the lock released.
@@ -327,7 +339,23 @@ func (am *AccountManager) Licenses(ctx context.Context) ([]account.License, erro
 	if token == "" {
 		return nil, fmt.Errorf("not logged in")
 	}
-	return account.ListLicenses(ctx, token)
+	licenses, err := account.ListLicenses(ctx, token)
+	am.mu.Lock()
+	am.licensesCached = true
+	am.licensesCache = licenses
+	am.licensesErr = err
+	am.mu.Unlock()
+	return licenses, err
+}
+
+// CachedLicenses returns the last successful-or-failed Licenses() result
+// for the current login, if there's been one yet -- lets the Account
+// dialog skip its "Loading…" placeholder (and the resize that follows once
+// a fresh fetch actually resolves) on every open after the first.
+func (am *AccountManager) CachedLicenses() (licenses []account.License, err error, ok bool) {
+	am.mu.Lock()
+	defer am.mu.Unlock()
+	return am.licensesCache, am.licensesErr, am.licensesCached
 }
 
 // Logout forgets the locally-stored login AND sync key -- purely local
@@ -340,6 +368,9 @@ func (am *AccountManager) Logout() {
 	am.accountToken = ""
 	am.syncKey = nil
 	am.lastError = ""
+	am.licensesCached = false
+	am.licensesCache = nil
+	am.licensesErr = nil
 	am.save()
 	am.mu.Unlock()
 	am.notify()

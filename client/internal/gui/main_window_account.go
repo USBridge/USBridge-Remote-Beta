@@ -62,10 +62,13 @@ func (mw *MainWindow) showAccountDialog() {
 	body := container.NewVBox()
 	// licensesLoaded/licensesCache/licensesErr: fetched exactly ONCE per
 	// dialog open (the first time render() reaches the LoggedIn case), not
-	// re-fetched on every render -- see accountLicensesList below.
-	var licensesLoaded bool
-	var licensesCache []account.License
-	var licensesErr error
+	// re-fetched on every render -- see accountLicensesList below. Seeded
+	// from AccountManager's own cross-dialog-open cache (am.CachedLicenses)
+	// so re-opening the dialog within the same login session renders the
+	// real license list on its very FIRST render -- no "Loading…"
+	// placeholder, and so no resize once a fetch would otherwise resolve
+	// moments later (see accountLicensesList's own doc comment).
+	licensesCache, licensesErr, licensesLoaded := am.CachedLicenses()
 	// resettingSyncPassphrase: true while the "Forgot passphrase? Reset
 	// it" flow (see accountSyncPassphraseSection) is showing its
 	// new-passphrase entry -- a UI-only flag, not part of AccountManager's
@@ -442,15 +445,22 @@ func clampFloat32(v, lo, hi float32) float32 {
 // result on every subsequent render() call -- render() itself only runs on
 // a real state transition now (see accountDialogSnapshot), but this cache
 // also means a manual re-render (e.g. after setting a sync passphrase)
-// doesn't refire an unnecessary network call.
+// doesn't refire an unnecessary network call. *loaded/*cache/*cacheErr
+// start out already seeded from AccountManager.CachedLicenses() (see
+// showAccountDialog) whenever this isn't the first dialog open of the
+// login session, so the network round-trip below -- and the placeholder
+// row it shows while in flight -- only happens once per login, not once
+// per dialog open.
 func accountLicensesList(am *controller.AccountManager, loaded *bool, cache *[]account.License, cacheErr *error, window fyne.Window, render func()) fyne.CanvasObject {
 	if *loaded {
 		return renderLicenses(*cache, *cacheErr, window)
 	}
 
-	mutedLoading := canvas.NewText("Loading your licenses…", design.ColorTextMuted)
-	mutedLoading.TextSize = 11
-	box := container.NewVBox(mutedLoading)
+	// Same shape (container.NewBorder + 24x24 right slot) a real license
+	// row renders as, so its MinSize height already matches what's about to
+	// replace it -- the license card doesn't change height once the fetch
+	// below resolves and render() swaps this out.
+	box := container.NewVBox(newAccountLicenseSkeletonRow())
 	go func() {
 		licenses, err := am.Licenses(context.Background())
 		*cache = licenses

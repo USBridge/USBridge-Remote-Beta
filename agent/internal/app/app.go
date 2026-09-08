@@ -1039,6 +1039,19 @@ func (a *App) SetStreamBackend(kind string) error {
 	}
 
 	a.startSunshine() // generic despite the name -- starts whatever a.stream now is
+
+	// Mirrors RestartSunshine's own wait, for the same reason (see its doc
+	// comment): startSunshine only waits for the OS to fork the new
+	// backend's process, not for its own bootstrap (config parse, capture
+	// device enumeration, binding its HTTPS/RTSP/pairing listeners) to
+	// finish. Without this, a client that reconnects the instant this call
+	// returns can hit a port the new backend hasn't bound yet -- observed
+	// live as the client's pairing GET stalling for its full ~45s HTTP
+	// timeout, then one more failed attempt (RTSP DESCRIBE -1), before a
+	// third attempt finally landed after the backend had caught up on its
+	// own. WaitReady closes that window instead of relying on the client's
+	// own retry/backoff to eventually paper over it.
+	a.stream.WaitReady(a.cfg.SunshinePort, 5*time.Second)
 	a.waitForMonitorCorrelation()
 	a.restartStreamProxy()
 

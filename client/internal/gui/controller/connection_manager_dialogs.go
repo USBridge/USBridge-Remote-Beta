@@ -83,10 +83,15 @@ type connectionDialogSecondaryButton struct {
 	// Scan QR/Paste Link only; every other caller (Cancel, the danger
 	// Delete button) keeps the original, larger sizing.
 	compact bool
-	bg      *canvas.Rectangle
-	border  *canvas.Rectangle
-	label   *canvas.Text
-	icon    *canvas.Image
+	// disabled mutes this button's colors and makes Tapped a no-op -- set
+	// via SetDisabled, not directly, so the visual updates immediately.
+	// Connect/Save use this to visually match the validation they already
+	// silently enforced (a tap with empty fields just did nothing before).
+	disabled bool
+	bg       *canvas.Rectangle
+	border   *canvas.Rectangle
+	label    *canvas.Text
+	icon     *canvas.Image
 }
 
 // connectionDialogSecondaryButton's size constants -- normal vs. compact
@@ -288,9 +293,36 @@ func (b *connectionDialogSecondaryButton) MinSize() fyne.Size {
 }
 
 func (b *connectionDialogSecondaryButton) Tapped(*fyne.PointEvent) {
+	if b.disabled {
+		return
+	}
 	if b.onTapped != nil {
 		b.onTapped()
 	}
+}
+
+// SetLabel changes the button's text in place -- Paste Link swaps to
+// "Manual" while its inline paste view is showing, and back again once
+// it's dismissed (see showConnectionEditorDialog's showPasteFields/
+// showNormalFields).
+func (b *connectionDialogSecondaryButton) SetLabel(text string) {
+	b.labelText = text
+	if b.label != nil {
+		b.label.Text = text
+	}
+	b.Refresh()
+}
+
+// SetDisabled mutes this button's colors and makes Tapped a no-op --
+// Connect/Save use this so an empty-fields state (which their own
+// onConnect/onSave already silently rejected) also looks unclickable
+// instead of just behaving that way.
+func (b *connectionDialogSecondaryButton) SetDisabled(v bool) {
+	if b.disabled == v {
+		return
+	}
+	b.disabled = v
+	b.refreshVisuals()
 }
 
 func (b *connectionDialogSecondaryButton) TappedSecondary(*fyne.PointEvent) {}
@@ -307,8 +339,34 @@ func (b *connectionDialogSecondaryButton) MouseOut() {
 	b.refreshVisuals()
 }
 
+// connectionDialogDisabledFill/Text/IconTranslucency -- the one shared
+// "muted" look every button in this dialog switches to on SetDisabled(true),
+// regardless of its own normal/hover colors (Connect's lime, Save's teal,
+// Paste's dark pill all read as one consistent "not clickable yet" state
+// instead of each dimming its own color differently).
+var (
+	connectionDialogDisabledFill = color.NRGBA{R: 0x22, G: 0x26, B: 0x2a, A: 0x80}
+	connectionDialogDisabledText = color.NRGBA{R: 0x6b, G: 0x6e, B: 0x63, A: 0xff}
+)
+
+const connectionDialogDisabledIconTranslucency = 0.55
+
 func (b *connectionDialogSecondaryButton) refreshVisuals() {
 	if b.bg == nil || b.border == nil || b.label == nil || b.icon == nil {
+		return
+	}
+
+	if b.disabled {
+		b.bg.FillColor = connectionDialogDisabledFill
+		b.border.StrokeColor = color.Transparent
+		b.border.StrokeWidth = 0
+		b.label.Color = connectionDialogDisabledText
+		b.icon.Resource = b.iconRes
+		b.icon.Translucency = connectionDialogDisabledIconTranslucency
+		b.bg.Refresh()
+		b.border.Refresh()
+		b.label.Refresh()
+		b.icon.Refresh()
 		return
 	}
 
@@ -317,6 +375,7 @@ func (b *connectionDialogSecondaryButton) refreshVisuals() {
 	b.border.StrokeWidth = 0
 	b.label.Color = b.textColor
 	b.icon.Resource = b.iconRes
+	b.icon.Translucency = 0
 	if b.hovered {
 		b.bg.FillColor = b.hoverFillColor
 		b.label.Color = b.hoverTextColor
@@ -1145,9 +1204,9 @@ func showConnectionEditorDialog(parent fyne.Window, window fyne.Window, spec con
 		registerCheckContainer.Refresh()
 	}
 	updateRegisterVisibility(spec.tailscaleHostValue)
-	tsEntry.OnChanged = func(text string) {
-		updateRegisterVisibility(text)
-	}
+	// tsEntry.OnChanged is set further down, once updateActionButtonsEnabled
+	// exists too -- one handler driving both the register row and the
+	// Connect/Save disabled state off the same field.
 
 	// formSwap holds exactly one child at a time -- statsBox (the Name/LAN/
 	// TS/Token fields) normally, swapped out for the inline paste view
@@ -1175,9 +1234,20 @@ func showConnectionEditorDialog(parent fyne.Window, window fyne.Window, spec con
 			spec.onQR()
 		})
 
+		// linkBtn's own label doubles as the paste view's state: "Paste
+		// Link" when the normal fields are showing, "Manual" (tap to go
+		// back to them) while the paste view is active -- one button
+		// driving both directions instead of Paste Link only opening and
+		// Cancel/Apply being the only ways back.
+		var linkBtn *connectionDialogSecondaryButton
+		pasteActive := false
 		showNormalFields := func() {
 			formSwap.Objects = []fyne.CanvasObject{statsBox}
 			formSwap.Refresh()
+			pasteActive = false
+			if linkBtn != nil {
+				linkBtn.SetLabel("Paste Link")
+			}
 			if d != nil {
 				d.Refresh()
 			}
@@ -1189,17 +1259,28 @@ func showConnectionEditorDialog(parent fyne.Window, window fyne.Window, spec con
 			showNormalFields()
 		}, showNormalFields)
 		pasteView := container.New(&matchHeightLayout{target: statsBox}, pasteViewBase)
-		if spec.startWithPasteLink {
-			formSwap.Objects = []fyne.CanvasObject{pasteView}
-		}
-
-		linkBtn := newConnectionDialogWideActionButton("Paste Link", assets.LinkIconLime, design.ColorConnectionAddFill, func() {
+		showPasteFields := func() {
 			formSwap.Objects = []fyne.CanvasObject{pasteView}
 			formSwap.Refresh()
+			pasteActive = true
+			if linkBtn != nil {
+				linkBtn.SetLabel("Manual")
+			}
 			if d != nil {
 				d.Refresh()
 			}
+		}
+
+		linkBtn = newConnectionDialogWideActionButton("Paste Link", assets.LinkIconLime, design.ColorConnectionAddFill, func() {
+			if pasteActive {
+				showNormalFields()
+			} else {
+				showPasteFields()
+			}
 		})
+		if spec.startWithPasteLink {
+			showPasteFields()
+		}
 		// Full width (equal split, GridWithColumns), not the buttons' own
 		// natural/content width -- they should span the same width as the
 		// fields below them; compact keeps their icon/text/height small
@@ -1247,6 +1328,7 @@ func showConnectionEditorDialog(parent fyne.Window, window fyne.Window, spec con
 	var connectBtn fyne.CanvasObject
 	var deleteBtn fyne.CanvasObject
 	var saveBtn fyne.CanvasObject
+	var cBtn *connectionDialogSecondaryButton
 
 	if spec.onConnect != nil {
 		connectLabel := spec.connectLabel
@@ -1257,7 +1339,7 @@ func showConnectionEditorDialog(parent fyne.Window, window fyne.Window, spec con
 		if cIcon == nil {
 			cIcon = assets.ConnectIcon
 		}
-		cBtn := &connectionDialogSecondaryButton{
+		cBtn = &connectionDialogSecondaryButton{
 			labelText: connectLabel,
 			onTapped: func() {
 				if spec.onConnect != nil && !spec.onConnect(nameEntry.Text, lanEntry.Text, tsEntry.Text, tokenEntry.Text, registerCheck.Checked) {
@@ -1304,6 +1386,36 @@ func showConnectionEditorDialog(parent fyne.Window, window fyne.Window, spec con
 	}
 	sBtn.ExtendBaseWidget(sBtn)
 	saveBtn = sBtn
+
+	// Connect/Save already silently refused an empty-fields tap (their
+	// onConnect/onSave return false above) -- this just makes that state
+	// visible instead of only discoverable by clicking. requireName mirrors
+	// showEditDialog's own validation (name required there, not on Add);
+	// onDelete is only ever set by showEditDialog, so it doubles as that
+	// signal here without threading a separate flag through the spec.
+	requireName := spec.onDelete != nil
+	updateActionButtonsEnabled := func() {
+		hasHost := strings.TrimSpace(lanEntry.Text) != "" || strings.TrimSpace(tsEntry.Text) != ""
+		ok := hasHost
+		if requireName {
+			ok = ok && strings.TrimSpace(nameEntry.Text) != ""
+		}
+		if cBtn != nil {
+			cBtn.SetDisabled(!ok)
+		}
+		sBtn.SetDisabled(!ok)
+	}
+	updateActionButtonsEnabled()
+	nameEntry.OnChanged = func(string) {
+		updateActionButtonsEnabled()
+	}
+	lanEntry.OnChanged = func(string) {
+		updateActionButtonsEnabled()
+	}
+	tsEntry.OnChanged = func(text string) {
+		updateRegisterVisibility(text)
+		updateActionButtonsEnabled()
+	}
 
 	if spec.onDelete != nil {
 		btn := newConnectionDialogDangerSecondaryButton(deleteLabel, theme.DeleteIcon(), func() {
@@ -1651,6 +1763,9 @@ type connectionDialogIconButton struct {
 	customNormalBorder color.Color
 	customHoverBorder  color.Color
 	opaqueIcon         bool
+	// disabled mutes this button and makes Tapped a no-op -- see SetDisabled.
+	// The paste view's Apply button uses this while its link field is empty.
+	disabled bool
 }
 
 func newConnectionDialogIconButton(resource fyne.Resource, onTapped func()) *connectionDialogIconButton {
@@ -1677,9 +1792,22 @@ func (b *connectionDialogIconButton) SetResource(resource fyne.Resource) {
 }
 
 func (b *connectionDialogIconButton) Tapped(*fyne.PointEvent) {
+	if b.disabled {
+		return
+	}
 	if b.onTapped != nil {
 		b.onTapped()
 	}
+}
+
+// SetDisabled mutes this button (a flat gray fill, no border, a faded icon)
+// and makes Tapped a no-op.
+func (b *connectionDialogIconButton) SetDisabled(v bool) {
+	if b.disabled == v {
+		return
+	}
+	b.disabled = v
+	b.refreshVisuals()
 }
 
 func (b *connectionDialogIconButton) TappedSecondary(*fyne.PointEvent) {}
@@ -1697,6 +1825,9 @@ func (b *connectionDialogIconButton) MouseOut() {
 }
 
 func (b *connectionDialogIconButton) Cursor() desktop.Cursor {
+	if b.disabled {
+		return desktop.DefaultCursor
+	}
 	return desktop.PointerCursor
 }
 
@@ -1727,6 +1858,15 @@ func (b *connectionDialogIconButton) refreshVisuals() {
 	}
 
 	b.icon.Resource = b.resource
+
+	if b.disabled {
+		b.bg.FillColor = connectionDialogDisabledFill
+		b.bdr.StrokeColor = color.Transparent
+		b.icon.Translucency = connectionDialogDisabledIconTranslucency
+		b.bg.Refresh()
+		b.icon.Refresh()
+		return
+	}
 
 	if b.opaqueIcon {
 		b.icon.Translucency = 0
@@ -1986,14 +2126,6 @@ func newConnectionDialogInlinePasteView(parent fyne.Window, onApply func(interna
 		errLabel.Refresh()
 	}
 
-	entry.onFocusChanged = nil
-	entry.OnChanged = func(_ string) {
-		if errLabel.Text != "" {
-			errLabel.Text = ""
-			errLabel.Refresh()
-		}
-	}
-
 	cancelRes := fyne.NewStaticResource("dialog_cancel.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#8f9381"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>`))
 	closeBtn := newCompactConnectionDialogIconButton(cancelRes, func() {
 		reset()
@@ -2022,6 +2154,18 @@ func newConnectionDialogInlinePasteView(parent fyne.Window, onApply func(interna
 	applyBtn.customHoverFill = color.NRGBA{R: 0x61, G: 0xf0, B: 0xd3, A: 0xff}
 	applyBtn.customNormalBorder = color.Transparent
 	applyBtn.customHoverBorder = color.Transparent
+	// Disabled (muted) until there's something to actually apply -- an
+	// empty field couldn't have submitted anyway (parseQRContents rejects
+	// ""), this just shows that up front instead of only on tap.
+	applyBtn.SetDisabled(true)
+	entry.onFocusChanged = nil
+	entry.OnChanged = func(text string) {
+		if errLabel.Text != "" {
+			errLabel.Text = ""
+			errLabel.Refresh()
+		}
+		applyBtn.SetDisabled(strings.TrimSpace(text) == "")
+	}
 
 	actionsLeft := container.NewHBox(closeBtn, view.NewInset(container.NewCenter(errLabel), 8, 0, 0, 0))
 	actionsRight := container.NewHBox(pasteBtn, applyBtn)

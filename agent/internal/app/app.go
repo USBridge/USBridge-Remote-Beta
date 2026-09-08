@@ -528,7 +528,38 @@ func keepDisplayAwake(ctx context.Context) {
 	go func() { _ = cmd.Wait() }()
 }
 
+// startSunshine is the guarded entry point every caller *except* the
+// RustShine update flow itself should use: onExit (fired by
+// watchProcessExit on literally any process exit, deliberate or not -- see
+// its own doc comment) and sunshineWatchdog's periodic tick both go through
+// this. Skipping while RustShineUpdateInProgress is set closes a real race
+// confirmed live: stopRustShineForUpdate() calls a.stream.Stop() to release
+// the .exe's file lock before entitlement.StageRustShine's rename, but that
+// same Stop() also makes watchProcessExit fire onExit -- which used to call
+// this function directly and relaunch the *old* binary on the spot,
+// re-locking the file before the rename (or the periodic watchdog's own
+// independent 15s tick, landing in the same window) ever got a chance to
+// run. The update flow itself calls startSunshineNow directly (see
+// checkRustShineUpdate/CheckRustShineUpdateNow's own failure-recovery
+// calls, and RestartSunshine's self-contained stop+start for the success
+// path) precisely so its own deliberate restarts aren't the ones this
+// guard suppresses.
 func (a *App) startSunshine() {
+	a.entMu.Lock()
+	updateInProgress := a.entStatus.RustShineUpdateInProgress
+	a.entMu.Unlock()
+	if updateInProgress {
+		log.Printf("[app] startSunshine skipped -- rustshine update in progress, the update flow owns restarting it")
+		return
+	}
+	a.startSunshineNow()
+}
+
+// startSunshineNow is startSunshine's actual body, callable directly by the
+// RustShine update flow (see startSunshine's doc comment for why those
+// callers need to bypass the RustShineUpdateInProgress guard rather than
+// trip over it).
+func (a *App) startSunshineNow() {
 	if a.stream == nil {
 		return
 	}
@@ -1795,7 +1826,7 @@ func (a *App) checkRustShineUpdate(ctx context.Context, entitlementToken string)
 		// without video until the next 15s watchdog tick.
 		log.Printf("[app] rustshine auto-update to %s failed (will retry next interval): %v", version, err)
 		if stopped {
-			a.startSunshine()
+			a.startSunshineNow()
 		}
 		return
 	}
@@ -1932,7 +1963,7 @@ func (a *App) CheckRustShineUpdateNow() error {
 	if err := entitlement.StageRustShine(ctx, a.cfg.StateDir, token, nil); err != nil {
 		a.setEntError(fmt.Sprintf("update failed: %v", err))
 		if stopped {
-			a.startSunshine()
+			a.startSunshineNow()
 		}
 		return err
 	}

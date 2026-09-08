@@ -310,18 +310,22 @@ func newConnectionListActionsCell(item ConnectionListItem) fyne.CanvasObject {
 	connectIconResource := fyne.NewStaticResource("custom-connect.svg", []byte(connectIconColored))
 
 	connectBtn := newIconChromeButton(iconChromeButtonSpec{
-		NormalFill:   connectColor,
-		HoverFill:    connectHover,
-		DisabledFill: connectionActionBlockedFill,
-		Stroke:       color.Transparent,
-		LabelColor:   color.NRGBA{R: 0x4c, G: 0x68, B: 0x03, A: 0xff},
-		LabelBold:    true,
-		LabelSize:    10,
-		CornerRadius: 6,
-		NormalIcon:   connectIconResource,
-		IconSize:     fyne.NewSize(10, 10),
-		ButtonSize:   fyne.NewSize(0, 23),
-		OnTapped:     item.Actions.OnUse,
+		NormalFill:         connectColor,
+		HoverFill:          connectHover,
+		DisabledFill:       connectionActionBlockedFill,
+		MuteDisabledVisual: true,
+		Stroke:             color.Transparent,
+		LabelColor:         color.NRGBA{R: 0x4c, G: 0x68, B: 0x03, A: 0xff},
+		LabelBold:          true,
+		LabelSize:          10,
+		CornerRadius:       6,
+		NormalIcon:         connectIconResource,
+		IconSize:           fyne.NewSize(10, 10),
+		ButtonSize:         fyne.NewSize(0, 23),
+		OnTapped:           item.Actions.OnUse,
+		LoadingFill:        connectLoadingFill,
+		LoadingIcon:        assets.ConnectIconBoldBlack,
+		LoadingLabelColor:  color.Black,
 	})
 	connectBtn.SetText("Connect")
 	connectBtn.SetDisabled(item.State.Disabled)

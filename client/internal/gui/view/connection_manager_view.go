@@ -320,6 +320,12 @@ func (l *DeviceNameRowLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
 
 var connectionActionBlockedFill = design.ColorGray900
 
+// connectLoadingFill is the Connect button's own background while
+// SetLoading(true) -- a slightly darker shade of its normal lime fill
+// (color.NRGBA{0xc4, 0xe7, 0x7a}), so a mid-connect button reads as
+// "pressed and busy" rather than swapping to an unrelated spinner icon.
+var connectLoadingFill = color.NRGBA{R: 0x9d, G: 0xb9, B: 0x62, A: 0xff}
+
 func NewConnectionManagerUI(onQR func(), onAdd func(), onHelp func(), onPromo func(), onPasteLink func(), onSortToggle func(kind string)) *ConnectionManagerUI {
 	connectionsBox := container.NewVBox()
 	// Side margins match connectionsHeaderSideMargin (the section header
@@ -1679,6 +1685,26 @@ type iconChromeButtonSpec struct {
 	// caller relies on.
 	HoverStroke     color.Color
 	HoverLabelColor color.Color
+	// LoadingFill/LoadingIcon/LoadingLabelColor override the button's normal
+	// appearance while SetLoading(true) is active, instead of the old
+	// looping spinner-frame animation -- e.g. the Connect button going a
+	// touch darker with a black icon/label while its own connection attempt
+	// is in flight, so it reads as "pressed and busy" rather than replacing
+	// its icon with an unrelated spinner glyph. nil (the zero value) on any
+	// of them means "no change from the normal-state value", so a button
+	// that never calls SetLoading is unaffected.
+	LoadingFill       color.Color
+	LoadingIcon       fyne.Resource
+	LoadingLabelColor color.Color
+	// MuteDisabledVisual, when true, skips the usual "disabled" dimming
+	// (DisabledFill/DisabledIcon/icon translucency/muted label) entirely
+	// while spec.Disabled is set -- Tapped/MouseIn still block interaction,
+	// the button just keeps looking exactly like its normal-state self.
+	// Used by the Connect button: while one connection is mid-connect,
+	// every OTHER card's Connect button becomes physically unclickable but
+	// shouldn't visually change at all -- a wall of grayed-out buttons that
+	// blend into the card background read as broken, not "busy elsewhere".
+	MuteDisabledVisual bool
 }
 
 type iconChromeButton struct {
@@ -1869,18 +1895,26 @@ func (b *iconChromeButton) refreshVisuals() {
 
 	switch {
 	case b.loading:
-		if len(assets.LoadingGrayFrames) > 0 {
-			b.icon.Resource = assets.LoadingGrayFrames[0]
+		if b.spec.LoadingFill != nil {
+			b.bg.FillColor = b.spec.LoadingFill
+		}
+		if b.spec.LoadingIcon != nil {
+			b.icon.Resource = b.spec.LoadingIcon
+		}
+		if b.spec.LoadingLabelColor != nil {
+			b.label.Color = b.spec.LoadingLabelColor
 		}
 	case b.spec.Disabled:
-		if b.spec.DisabledFill != nil {
-			b.bg.FillColor = b.spec.DisabledFill
+		if !b.spec.MuteDisabledVisual {
+			if b.spec.DisabledFill != nil {
+				b.bg.FillColor = b.spec.DisabledFill
+			}
+			if b.spec.DisabledIcon != nil {
+				b.icon.Resource = b.spec.DisabledIcon
+			}
+			b.icon.Translucency = 0.18
+			b.label.Color = design.ColorTextMuted
 		}
-		if b.spec.DisabledIcon != nil {
-			b.icon.Resource = b.spec.DisabledIcon
-		}
-		b.icon.Translucency = 0.18
-		b.label.Color = design.ColorTextMuted
 	case b.hovered:
 		b.bg.FillColor = b.spec.HoverFill
 		if b.spec.HoverIcon != nil {
@@ -1894,17 +1928,10 @@ func (b *iconChromeButton) refreshVisuals() {
 		}
 	}
 
-	if b.loading {
-		b.anim.Start(assets.LoadingGrayFrames, func(frame fyne.Resource) {
-			if b.icon == nil {
-				return
-			}
-			b.icon.Resource = frame
-			b.icon.Refresh()
-		})
-	} else {
-		b.anim.Stop()
-	}
+	// iconChromeButton no longer runs a looping spinner animation (see
+	// LoadingFill/LoadingIcon above) -- b.anim is stopped unconditionally in
+	// case a button still mid-animation from a previous build gets reused.
+	b.anim.Stop()
 
 	// Independent, not either/or: the Grid/List toggle shows an icon next to
 	// its label (via CreateRenderer's iconLabelRow), while every other

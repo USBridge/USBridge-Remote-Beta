@@ -1938,7 +1938,9 @@ func (a *App) stopRustShineForUpdate() bool {
 	// unconditionally by name as a belt-and-suspenders guarantee that
 	// nothing named gamestream-server.exe survives this point, regardless
 	// of how it got there or whether this backend ever tracked it.
-	_ = exec.Command("taskkill", "/F", "/IM", "gamestream-server.exe").Run()
+	killCmd := exec.Command("taskkill", "/F", "/IM", "gamestream-server.exe")
+	maybeHideWindow(killCmd)
+	_ = killCmd.Run()
 	// Stop() only signals termination; give the OS a moment to actually
 	// release the exe's image-section file lock before the upcoming rename.
 	time.Sleep(500 * time.Millisecond)
@@ -1977,7 +1979,9 @@ func (a *App) stopRustShineForUpdate() bool {
 // plain taskkill above actually needs the elevated escalation, rather than
 // firing a UAC prompt unconditionally on every update.
 func processRunning(imageName string) bool {
-	out, err := exec.Command("tasklist", "/NH", "/FI", "IMAGENAME eq "+imageName).Output()
+	cmd := exec.Command("tasklist", "/NH", "/FI", "IMAGENAME eq "+imageName)
+	maybeHideWindow(cmd)
+	out, err := cmd.Output()
 	if err != nil {
 		return false
 	}

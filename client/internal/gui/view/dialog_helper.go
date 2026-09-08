@@ -232,6 +232,10 @@ func ShowConfirmYesLeftDanger(title, message string, callback func(bool), parent
 	showConfirmDialog(title, message, callback, parent, true)
 }
 
+// confirmToastRadius is ShowConfirmToast's own corner radius -- smaller than
+// design.RadiusMD (8) to match this toast's overall half-scale sizing.
+const confirmToastRadius float32 = 6
+
 // confirmToastButtonsLayout packs two buttons at their own natural content
 // width side by side, right-aligned within whatever width it's given --
 // unlike confirmDialogButtonsLayout (the full confirm dialogs' half-width
@@ -307,21 +311,21 @@ func newConfirmToastButton(label string, fillColor, borderColor, textColor, hove
 
 func (b *confirmToastButton) CreateRenderer() fyne.WidgetRenderer {
 	b.bg = canvas.NewRectangle(b.fillColor)
-	b.bg.CornerRadius = design.RadiusMD
+	b.bg.CornerRadius = confirmToastRadius
 
 	b.border = canvas.NewRectangle(color.Transparent)
-	b.border.CornerRadius = design.RadiusMD
+	b.border.CornerRadius = confirmToastRadius
 	if b.borderColor != nil && b.borderColor != color.Transparent {
 		b.border.StrokeColor = b.borderColor
 		b.border.StrokeWidth = 1
 	}
 
 	b.label = canvas.NewText(b.labelText, b.textColor)
-	b.label.TextSize = 13
+	b.label.TextSize = 10
 	b.label.TextStyle.Bold = true
 	b.label.Alignment = fyne.TextAlignCenter
 
-	content := container.NewStack(b.bg, b.border, NewInset(container.NewCenter(b.label), 16, 16, 8, 8))
+	content := container.NewStack(b.bg, b.border, NewInset(container.NewCenter(b.label), 9, 9, 3, 3))
 	return widget.NewSimpleRenderer(content)
 }
 
@@ -397,7 +401,7 @@ func ShowConfirmToast(message string, callback func(bool), parent fyne.Window) {
 	}
 
 	text := canvas.NewText(message, design.ColorTextLight)
-	text.TextSize = 13
+	text.TextSize = 10
 
 	noBtn := newConfirmToastButton(i18n.Current.No,
 		color.Transparent, design.ColorBorder, design.ColorTextLight,
@@ -408,20 +412,20 @@ func ShowConfirmToast(message string, callback func(bool), parent fyne.Window) {
 		color.NRGBA{R: 0x61, G: 0xf0, B: 0xd3, A: 0xff}, design.ColorGray950,
 		func() { closePopup(true) })
 
-	buttons := container.New(&confirmToastButtonsLayout{gap: 8}, noBtn, yesBtn)
-	body := container.NewBorder(nil, nil, nil, buttons, NewInset(text, 0, 14, 0, 0))
+	buttons := container.New(&confirmToastButtonsLayout{gap: 5}, noBtn, yesBtn)
+	body := container.NewBorder(nil, nil, nil, buttons, NewInset(text, 0, 8, 0, 0))
 
 	bg := canvas.NewRectangle(design.ColorGray900)
-	bg.CornerRadius = design.RadiusMD
+	bg.CornerRadius = confirmToastRadius
 
 	border := canvas.NewRectangle(color.Transparent)
-	border.CornerRadius = design.RadiusMD
+	border.CornerRadius = confirmToastRadius
 	border.StrokeColor = design.ColorBorder
 	border.StrokeWidth = 1
 
 	panel := container.NewStack(
 		bg,
-		NewInset(body, 16, 16, 12, 12),
+		NewInset(body, 9, 9, 6, 6),
 		border,
 	)
 
@@ -440,7 +444,7 @@ func ShowConfirmToast(message string, callback func(bool), parent fyne.Window) {
 			return fyne.NewSize(panelWidth, panelMin.Height)
 		},
 		PanelPos: func(canvasSize fyne.Size, panelSize fyne.Size) fyne.Position {
-			bottomMargin := clampFloat32(canvasSize.Height*0.07, 40, 64)
+			bottomMargin := clampFloat32(canvasSize.Height*0.05, 24, 40)
 			return fyne.NewPos((canvasSize.Width-panelSize.Width)/2, canvasSize.Height-panelSize.Height-bottomMargin)
 		},
 	})

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -136,4 +137,112 @@ func RequestGPUClockLock(binPath string, watchPID int) error {
 // by streamhost.rustshineBackend.Start (no *Service instance handy there).
 func (s *Service) RequestGPUClockLock(binPath string, watchPID int) error {
 	return RequestGPUClockLock(binPath, watchPID)
+}
+
+var procShellExecuteExW = shell32.NewProc("ShellExecuteExW")
+
+// shellExecuteInfoW mirrors Win32's SHELLEXECUTEINFOW -- unlike plain
+// ShellExecuteW (see RequestGPUClockLock above), the Ex form can hand back a
+// waitable process handle via hProcess (when fMask carries
+// seeMaskNoCloseProcess), which is the whole reason this function exists:
+// KillGamestreamServerElevated needs to block until the elevated helper
+// actually *exits*, not just launches, before its caller retries staging.
+// Field order/types must match the C struct exactly -- Go's default struct
+// layout already produces the same padding the unmodified (no #pragma
+// pack) Win32 struct gets, as long as every field here has the same size as
+// its C counterpart.
+type shellExecuteInfoW struct {
+	cbSize         uint32
+	fMask          uint32
+	hwnd           uintptr
+	lpVerb         *uint16
+	lpFile         *uint16
+	lpParameters   *uint16
+	lpDirectory    *uint16
+	nShow          int32
+	hInstApp       uintptr
+	lpIDList       uintptr
+	lpClass        *uint16
+	hkeyClass      uintptr
+	dwHotKey       uint32
+	hIconOrMonitor uintptr
+	hProcess       uintptr
+}
+
+const (
+	seeMaskNoCloseProcess = 0x00000040
+	seeMaskNoAsync        = 0x00000100
+)
+
+// KillGamestreamServerElevated force-kills every gamestream-server.exe
+// process by image name via an elevated (UAC-prompted)
+// `taskkill /F /IM gamestream-server.exe /T` -- the escalation of last
+// resort for the one confirmed-live case a same-level taskkill can't reach
+// on its own: an orphaned instance (root cause not fully pinned down --
+// see agent/internal/app/app.go's stopRustShineForUpdate doc comment for
+// the full investigation) that survived even the calling agent's own
+// plain, same-user taskkill sweep with "Access is denied", blocking
+// RustShine updates indefinitely by keeping the staged binary's rename
+// target locked. Unlike RequestGPUClockLock's fire-and-forget daemon
+// helper, this blocks (bounded by a fixed timeout) until the elevated
+// taskkill actually exits -- the whole point is knowing the file is
+// unlocked before the caller retries staging, not just that a prompt
+// appeared. A declined UAC prompt or a non-interactive session (no desktop
+// for the prompt to land on, e.g. the true Session-0 Windows-service path)
+// both surface as an error here; both are non-fatal to the caller, which
+// already falls back to relaunching the old binary and retrying at the
+// next interval regardless of how this returns.
+func (s *Service) KillGamestreamServerElevated() error {
+	const killTimeout = 15 * time.Second
+
+	verbPtr, err := syscall.UTF16PtrFromString("runas")
+	if err != nil {
+		return err
+	}
+	filePtr, err := syscall.UTF16PtrFromString("taskkill.exe")
+	if err != nil {
+		return err
+	}
+	paramsPtr, err := syscall.UTF16PtrFromString("/F /IM gamestream-server.exe /T")
+	if err != nil {
+		return err
+	}
+
+	info := shellExecuteInfoW{
+		fMask:        seeMaskNoCloseProcess | seeMaskNoAsync,
+		lpVerb:       verbPtr,
+		lpFile:       filePtr,
+		lpParameters: paramsPtr,
+		nShow:        swHide,
+	}
+	info.cbSize = uint32(unsafe.Sizeof(info))
+
+	ret, _, callErr := procShellExecuteExW.Call(uintptr(unsafe.Pointer(&info)))
+	if ret == 0 {
+		return fmt.Errorf("ShellExecuteExW(runas, taskkill.exe): %v (the UAC prompt may have been declined)", callErr)
+	}
+	if info.hProcess == 0 {
+		// Launched but handed back no waitable handle -- nothing more to
+		// verify here, but not itself a failure.
+		return nil
+	}
+	h := windows.Handle(info.hProcess)
+	defer windows.CloseHandle(h)
+
+	event, waitErr := windows.WaitForSingleObject(h, uint32(killTimeout/time.Millisecond))
+	if waitErr == windows.WAIT_TIMEOUT {
+		return fmt.Errorf("elevated taskkill did not finish within %s", killTimeout)
+	}
+	if waitErr != nil {
+		return fmt.Errorf("WaitForSingleObject: %w", waitErr)
+	}
+	if event != windows.WAIT_OBJECT_0 {
+		return fmt.Errorf("WaitForSingleObject: unexpected status %d", event)
+	}
+
+	var code uint32
+	if err := windows.GetExitCodeProcess(h, &code); err == nil && code != 0 {
+		return fmt.Errorf("elevated taskkill exited with code %d", code)
+	}
+	return nil
 }

@@ -155,3 +155,6 @@ func (s *Service) ClipboardInstallPreview() string { return "" }
 func (s *Service) GPUClockLockSupported() bool                            { return false }
 func (s *Service) GPUClockLockElevated() bool                             { return false }
 func (s *Service) RequestGPUClockLock(binPath string, watchPID int) error { return nil }
+
+// KillGamestreamServerElevated is Windows-only -- see service_windows.go.
+func (s *Service) KillGamestreamServerElevated() error { return nil }

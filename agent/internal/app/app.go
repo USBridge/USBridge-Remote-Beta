@@ -1942,7 +1942,46 @@ func (a *App) stopRustShineForUpdate() bool {
 	// Stop() only signals termination; give the OS a moment to actually
 	// release the exe's image-section file lock before the upcoming rename.
 	time.Sleep(500 * time.Millisecond)
+	// Confirmed live: the plain taskkill above can still leave a
+	// gamestream-server.exe alive with "Access is denied" even from this
+	// same agent's own same-user call -- root cause not fully pinned down
+	// (not self-spawned: gamestream-server's own source spawns no child
+	// processes on Windows), but reproducible: a manual StageRustShine
+	// against a genuinely clean process list staged and renamed in ~1.3s
+	// every time, while this exact flow, with a survivor still present,
+	// lost to "Access is denied" for the entire 20s renameWithRetry budget
+	// regardless. Escalating to a UAC-elevated taskkill closes that gap the
+	// same-level sweep above can't: an elevated `taskkill /F` carries
+	// enough privilege to reach a process a plain same-user one can't, the
+	// same reason Task Manager's own "End task" needs "Run as
+	// administrator" for some processes. Only fires when something is
+	// actually still there (a UAC prompt on every single update, needed or
+	// not, would be needlessly disruptive) and is itself non-fatal on
+	// failure/decline/no-desktop-to-prompt-on -- StageRustShine's own
+	// caller already retries at the next interval and falls back to
+	// relaunching the old binary regardless of how this returns.
+	if a.perms != nil && processRunning("gamestream-server.exe") {
+		log.Printf("[app] gamestream-server.exe survived the plain taskkill -- requesting elevation to force it (a UAC prompt may appear)")
+		if err := a.perms.KillGamestreamServerElevated(); err != nil {
+			log.Printf("[app] elevated taskkill failed or was declined: %v", err)
+		} else {
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
 	return true
+}
+
+// processRunning reports whether any process named imageName (e.g.
+// "gamestream-server.exe") is currently running, via `tasklist`'s own
+// image-name filter -- used by stopRustShineForUpdate to decide whether the
+// plain taskkill above actually needs the elevated escalation, rather than
+// firing a UAC prompt unconditionally on every update.
+func processRunning(imageName string) bool {
+	out, err := exec.Command("tasklist", "/NH", "/FI", "IMAGENAME eq "+imageName).Output()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(string(out)), strings.ToLower(imageName))
 }
 
 // restartRustShineIfActive re-execs the running RustShine subprocess (via

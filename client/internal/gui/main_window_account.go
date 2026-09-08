@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"image/color"
+	"strings"
 	"time"
 
 	"usbridge-client/internal/account"
@@ -89,14 +90,42 @@ func (mw *MainWindow) showAccountDialog() {
 			body.Add(container.NewCenter(cancelBtn))
 
 		case am.LoggedIn():
-			body.Add(widget.NewLabel(fmt.Sprintf("Signed in as %s", am.Email())))
-			if errMsg := am.LastError(); errMsg != "" {
-				body.Add(widget.NewLabel(errMsg))
+			letter := "U"
+			if trimmed := strings.TrimSpace(am.Email()); trimmed != "" {
+				letter = strings.ToUpper(string([]rune(trimmed)[0]))
 			}
-			body.Add(widget.NewSeparator())
-			body.Add(accountLicensesList(am, &licensesLoaded, &licensesCache, &licensesErr, render))
-			body.Add(widget.NewSeparator())
-			body.Add(accountSyncPassphraseSection(cm, am, &resettingSyncPassphrase, render))
+			signedInLabel := canvas.NewText("Signed in as", design.ColorTextMuted)
+			signedInLabel.TextSize = 10
+			emailText := canvas.NewText(am.Email(), design.ColorTextLight)
+			emailText.TextSize = 13
+			emailText.TextStyle = fyne.TextStyle{Bold: true}
+			identityHeader := container.NewHBox(
+				newAccountAvatarBadge(letter),
+				container.NewVBox(signedInLabel, emailText),
+			)
+
+			identityBody := container.NewVBox(identityHeader)
+			if errMsg := am.LastError(); errMsg != "" {
+				errText := canvas.NewText(errMsg, design.ColorAlert)
+				errText.TextSize = 11
+				identityBody.Add(errText)
+			}
+			identityBody.Add(newAccountDivider())
+			identityBody.Add(accountLicensesList(am, &licensesLoaded, &licensesCache, &licensesErr, mw.window, render))
+
+			body.Add(newAccountEyebrowLabel("Authenticated user"))
+			body.Add(newAccountCard(identityBody))
+			body.Add(newAccountCard(accountSyncPassphraseSection(cm, am, &resettingSyncPassphrase, render)))
+
+			var footerLeft fyne.CanvasObject
+			if am.HasSyncKey() && !resettingSyncPassphrase {
+				forgotBtn := widget.NewButton("Forgot passphrase? Reset it", func() {
+					resettingSyncPassphrase = true
+					render()
+				})
+				forgotBtn.Importance = widget.LowImportance
+				footerLeft = forgotBtn
+			}
 
 			logoutBtn := widget.NewButton("Log out", func() {
 				am.Logout()
@@ -111,8 +140,10 @@ func (mw *MainWindow) showAccountDialog() {
 				resettingSyncPassphrase = false
 				render()
 			})
-			logoutBtn.Importance = widget.LowImportance
-			body.Add(container.NewCenter(logoutBtn))
+			logoutBtn.Importance = widget.DangerImportance
+
+			body.Add(newAccountDivider())
+			body.Add(container.NewBorder(nil, nil, footerLeft, logoutBtn))
 
 		default:
 			intro := widget.NewLabel("Log in to see your USBridge licenses and sync your saved connections across devices.")
@@ -382,12 +413,14 @@ func clampFloat32(v, lo, hi float32) float32 {
 // a real state transition now (see accountDialogSnapshot), but this cache
 // also means a manual re-render (e.g. after setting a sync passphrase)
 // doesn't refire an unnecessary network call.
-func accountLicensesList(am *controller.AccountManager, loaded *bool, cache *[]account.License, cacheErr *error, render func()) fyne.CanvasObject {
+func accountLicensesList(am *controller.AccountManager, loaded *bool, cache *[]account.License, cacheErr *error, window fyne.Window, render func()) fyne.CanvasObject {
 	if *loaded {
-		return renderLicenses(*cache, *cacheErr)
+		return renderLicenses(*cache, *cacheErr, window)
 	}
 
-	box := container.NewVBox(widget.NewLabel("Loading your licenses…"))
+	mutedLoading := canvas.NewText("Loading your licenses…", design.ColorTextMuted)
+	mutedLoading.TextSize = 11
+	box := container.NewVBox(mutedLoading)
 	go func() {
 		licenses, err := am.Licenses(context.Background())
 		*cache = licenses
@@ -398,16 +431,23 @@ func accountLicensesList(am *controller.AccountManager, loaded *bool, cache *[]a
 	return box
 }
 
-func renderLicenses(licenses []account.License, err error) fyne.CanvasObject {
+func renderLicenses(licenses []account.License, err error, window fyne.Window) fyne.CanvasObject {
 	box := container.NewVBox()
 	switch {
 	case err != nil:
-		box.Add(widget.NewLabel(fmt.Sprintf("Could not load licenses: %v", err)))
+		errText := canvas.NewText(fmt.Sprintf("Could not load licenses: %v", err), design.ColorAlert)
+		errText.TextSize = 11
+		box.Add(errText)
 	case len(licenses) == 0:
-		box.Add(widget.NewLabel("No licenses on this account yet."))
+		mutedNone := canvas.NewText("No licenses on this account yet.", design.ColorTextMuted)
+		mutedNone.TextSize = 11
+		box.Add(mutedNone)
 	default:
-		for _, lic := range licenses {
-			box.Add(widget.NewLabel(fmt.Sprintf("[%s] %s — %s", lic.Kind, lic.Identifier, lic.Status)))
+		for i, lic := range licenses {
+			if i > 0 {
+				box.Add(newAccountDivider())
+			}
+			box.Add(newAccountLicenseRow(lic.Kind, lic.Identifier, lic.Status, window))
 		}
 	}
 	return box
@@ -425,14 +465,17 @@ func renderLicenses(licenses []account.License, err error) fyne.CanvasObject {
 // with it, since nothing can decrypt the old blob anymore once its
 // passphrase is forgotten).
 func accountSyncPassphraseSection(cm *controller.ConnectionManager, am *controller.AccountManager, resetting *bool, render func()) fyne.CanvasObject {
-	if am.HasSyncKey() && !*resetting {
-		status := widget.NewLabel("Connections sync: on")
-		forgotBtn := widget.NewButton("Forgot passphrase? Reset it", func() {
-			*resetting = true
-			render()
-		})
-		forgotBtn.Importance = widget.LowImportance
-		return container.NewVBox(status, container.NewCenter(forgotBtn))
+	titleText := canvas.NewText("Connections sync", design.ColorTextLight)
+	titleText.TextSize = 12
+	titleText.TextStyle = fyne.TextStyle{Bold: true}
+
+	on := am.HasSyncKey() && !*resetting
+	titleRow := container.New(&centeredInlineLayout{gap: 8, minGap: 6}, titleText, newAccountStatusPill(map[bool]string{true: "on", false: "off"}[on], on))
+
+	if on {
+		desc := canvas.NewText("End-to-end encrypted sync of your saved connections across devices.", design.ColorTextMuted)
+		desc.TextSize = 11
+		return container.NewVBox(titleRow, desc)
 	}
 
 	if *resetting {
@@ -476,7 +519,7 @@ func accountSyncPassphraseSection(cm *controller.ConnectionManager, am *controll
 		})
 		cancelBtn.Importance = widget.LowImportance
 
-		return container.NewVBox(warn, entry, statusLabel, container.NewHBox(resetBtn, cancelBtn))
+		return container.NewVBox(titleRow, warn, entry, statusLabel, container.NewHBox(resetBtn, cancelBtn))
 	}
 
 	label := widget.NewLabel("Set a sync passphrase to sync your saved connections across devices (never sent to our servers):")
@@ -490,5 +533,5 @@ func accountSyncPassphraseSection(cm *controller.ConnectionManager, am *controll
 		am.SetSyncPassphrase(entry.Text)
 		render()
 	})
-	return container.NewVBox(label, entry, container.NewCenter(saveBtn))
+	return container.NewVBox(titleRow, label, entry, container.NewCenter(saveBtn))
 }

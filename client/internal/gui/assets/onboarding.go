@@ -77,8 +77,6 @@ var (
 	powerOffIcon []byte
 	//go:embed reset.svg
 	resetIcon []byte
-	//go:embed USBridge.svg
-	usbridgeIcon []byte
 	//go:embed LogoUSBridge.svg
 	logoUSBridgeIcon []byte
 	//go:embed LogoUSBridge2.0.svg
@@ -91,6 +89,8 @@ var (
 	macosOSIcon []byte
 	//go:embed link-svgrepo-com.svg
 	linkIcon []byte
+	//go:embed cpu-svgrepo-com.svg
+	cpuIcon []byte
 	//go:embed onboarding/Front_panel.png
 	onboardingStep01 []byte
 )
@@ -215,16 +215,21 @@ var (
 	GridViewIconMuted  = fyne.NewStaticResource("grid-view-muted.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#c5c8b5"><rect x="3" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.5"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.5"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.5"/></svg>`))
 	ListViewIconAccent = fyne.NewStaticResource("list-view-accent.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#e9fdbb" stroke-width="2.2" stroke-linecap="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg>`))
 	ListViewIconMuted  = fyne.NewStaticResource("list-view-muted.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#c5c8b5" stroke-width="2.2" stroke-linecap="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg>`))
-	USBridgeOSIcon     = fyne.NewStaticResource("USBridge-os.svg", recolorMonoIcon(usbridgeIcon, "#C9C9C9", "1.8"))
+	// USBridgeOSIcon/USBridgeOSIconAccent: the KVM connection's own icon in
+	// List's row and Grid's card (see connection_manager_view.go's
+	// osIconResource and connection_grid_card.go's
+	// newConnectionCardStatusIndicator) -- a CPU chip glyph (cpuIcon), not
+	// the USBridge logo mark itself, since a wordmark/logo doesn't read as
+	// a device-type icon next to Linux/Windows/macOS's own OS glyphs.
+	USBridgeOSIcon = fyne.NewStaticResource("USBridge-os.svg", recolorFillIcon(cpuIcon, "#C9C9C9"))
 	// USBridgeOSIconAccent/*OSIconAgent: the Grid-mode connection card's
-	// status icon (see connection_grid_card.go's newConnectionCardStatusIndicator)
-	// colored by category instead of the neutral gray above -- KVM (the
-	// USBridge hardware itself) in #93c572 (design.ColorAccent's "salad"
-	// green), a software Agent's OS glyph in #41e0c3 (design.
+	// status icon colored by category instead of the neutral gray above --
+	// KVM (the USBridge hardware itself) in #93c572 (design.ColorAccent's
+	// "salad" green), a software Agent's OS glyph in #41e0c3 (design.
 	// ColorConnectionBadgeText's teal). Kept as separate resources rather
 	// than recoloring at runtime since every other icon here is baked the
 	// same way.
-	USBridgeOSIconAccent = fyne.NewStaticResource("USBridge-os-accent.svg", recolorMonoIcon(usbridgeIcon, "#93c572", "1.8"))
+	USBridgeOSIconAccent = fyne.NewStaticResource("USBridge-os-accent.svg", recolorFillIcon(cpuIcon, "#93c572"))
 	LinuxOSIconAgent     = fyne.NewStaticResource("linux-os-agent.svg", recolorMonoIcon(linuxOSIcon, "#41e0c3", "1.8"))
 	WindowsOSIconAgent   = fyne.NewStaticResource("windows-os-agent.svg", recolorMonoIcon(windowsOSIcon, "#41e0c3", "1.8"))
 	MacOSIconAgent       = fyne.NewStaticResource("macos-os-agent.svg", recolorMonoIcon(macosOSIcon, "#41e0c3", "1.8"))

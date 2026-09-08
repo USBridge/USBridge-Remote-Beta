@@ -1085,6 +1085,37 @@ func (l *gapTwoColumnsLayout) Layout(objects []fyne.CanvasObject, size fyne.Size
 	}
 }
 
+type matchHeightLayout struct {
+	target fyne.CanvasObject
+}
+
+func (l *matchHeightLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	for _, obj := range objects {
+		obj.Resize(size)
+		obj.Move(fyne.NewPos(0, 0))
+	}
+}
+
+func (l *matchHeightLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	min := fyne.NewSize(0, 0)
+	for _, obj := range objects {
+		m := obj.MinSize()
+		if m.Width > min.Width {
+			min.Width = m.Width
+		}
+		if m.Height > min.Height {
+			min.Height = m.Height
+		}
+	}
+	if l.target != nil {
+		tm := l.target.MinSize()
+		if tm.Height > min.Height {
+			min.Height = tm.Height
+		}
+	}
+	return min
+}
+
 func showConnectionEditorDialog(parent fyne.Window, window fyne.Window, spec connectionDialogSpec) *widget.PopUp {
 	// The same Name/LAN/TS/Token box (labels, placeholders, copy/paste
 	// icons, dark styling) the Grid card's inline edit and List's split-edit
@@ -1151,12 +1182,13 @@ func showConnectionEditorDialog(parent fyne.Window, window fyne.Window, spec con
 				d.Refresh()
 			}
 		}
-		pasteView := newConnectionDialogInlinePasteView(parent, func(ih, th, mk string) {
+		pasteViewBase := newConnectionDialogInlinePasteView(parent, func(ih, th, mk string) {
 			lanEntry.SetText(ih)
 			tsEntry.SetText(th)
 			tokenEntry.SetText(mk)
 			showNormalFields()
 		}, showNormalFields)
+		pasteView := container.New(&matchHeightLayout{target: statsBox}, pasteViewBase)
 		if spec.startWithPasteLink {
 			formSwap.Objects = []fyne.CanvasObject{pasteView}
 		}
@@ -1613,6 +1645,12 @@ type connectionDialogIconButton struct {
 	bg   *canvas.Rectangle
 	bdr  *canvas.Rectangle
 	icon *canvas.Image
+
+	customNormalFill   color.Color
+	customHoverFill    color.Color
+	customNormalBorder color.Color
+	customHoverBorder  color.Color
+	opaqueIcon         bool
 }
 
 func newConnectionDialogIconButton(resource fyne.Resource, onTapped func()) *connectionDialogIconButton {
@@ -1688,14 +1726,41 @@ func (b *connectionDialogIconButton) refreshVisuals() {
 		return
 	}
 
-	b.bg.FillColor = color.Transparent
-	b.bdr.StrokeColor = color.Transparent
 	b.icon.Resource = b.resource
-	b.icon.Translucency = 0.32
+
+	if b.opaqueIcon {
+		b.icon.Translucency = 0
+	} else {
+		b.icon.Translucency = 0.32
+	}
+
+	normFill := b.customNormalFill
+	if normFill == nil {
+		normFill = color.Transparent
+	}
+	normBorder := b.customNormalBorder
+	if normBorder == nil {
+		normBorder = color.Transparent
+	}
+
+	hovFill := b.customHoverFill
+	if hovFill == nil {
+		hovFill = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0x10}
+	}
+	hovBorder := b.customHoverBorder
+	if hovBorder == nil {
+		hovBorder = color.NRGBA{R: 0x8f, G: 0x93, B: 0x81, A: 0xff}
+	}
+
 	if b.hovered {
-		b.bg.FillColor = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0x10}
-		b.bdr.StrokeColor = color.NRGBA{R: 0x8f, G: 0x93, B: 0x81, A: 0xff}
-		b.icon.Translucency = 0.08
+		b.bg.FillColor = hovFill
+		b.bdr.StrokeColor = hovBorder
+		if !b.opaqueIcon {
+			b.icon.Translucency = 0.08
+		}
+	} else {
+		b.bg.FillColor = normFill
+		b.bdr.StrokeColor = normBorder
 	}
 
 	b.bg.Refresh()
@@ -1867,10 +1932,47 @@ func (cm *ConnectionManager) handleQRScan() {
 // receives the parsed hosts so the caller can refill the real fields and
 // swap back to them; the X button (onCancel) discards whatever was typed
 // and swaps back untouched.
+type pasteEntryTheme struct {
+	fyne.Theme
+}
+
+func (t *pasteEntryTheme) Color(name fyne.ThemeColorName, variant fyne.ThemeVariant) color.Color {
+	switch name {
+	case theme.ColorNameInputBackground:
+		return color.NRGBA{R: 255, G: 255, B: 255, A: 8}
+	case theme.ColorNameFocus:
+		return color.NRGBA{R: 255, G: 255, B: 255, A: 20}
+	case theme.ColorNameInputBorder:
+		return design.ColorConnectionBadgeText
+	case theme.ColorNamePrimary:
+		return design.ColorConnectionBadgeText
+	case theme.ColorNamePlaceHolder:
+		return design.ColorTextMuted
+	case theme.ColorNameShadow:
+		return color.Transparent
+	}
+	return t.Theme.Color(name, variant)
+}
+
+func (t *pasteEntryTheme) Size(name fyne.ThemeSizeName) float32 {
+	switch name {
+	case theme.SizeNameInputBorder:
+		return 1
+	case theme.SizeNameInnerPadding:
+		return 5
+	case theme.SizeNameInputRadius:
+		return 4
+	case theme.SizeNameText:
+		return 10
+	}
+	return t.Theme.Size(name)
+}
+
 func newConnectionDialogInlinePasteView(parent fyne.Window, onApply func(internalHost, tailscaleHost, masterKey string), onCancel func()) fyne.CanvasObject {
 	entry := &connectionDialogEntry{}
 	entry.MultiLine = true
 	entry.Wrapping = fyne.TextWrapWord
+	entry.TextStyle.Monospace = true
 	entry.ExtendBaseWidget(entry)
 	entry.SetPlaceHolder("usbridge://connect?...")
 	entry.SetMinRowsVisible(3)
@@ -1892,17 +1994,20 @@ func newConnectionDialogInlinePasteView(parent fyne.Window, onApply func(interna
 		}
 	}
 
-	closeBtn := newCompactConnectionDialogIconButton(theme.CancelIcon(), func() {
+	cancelRes := fyne.NewStaticResource("dialog_cancel.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#8f9381"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>`))
+	closeBtn := newCompactConnectionDialogIconButton(cancelRes, func() {
 		reset()
 		onCancel()
 	})
-	// Same platform-split pasteClipboardInto (Fyne's own Clipboard() on
-	// desktop/mobile, navigator.clipboard.readText() on wasm) that powers
-	// the Copy/Paste pair on every other field in this dialog.
+	closeBtn.opaqueIcon = true
+
 	pasteBtn := newCompactConnectionDialogIconButton(theme.ContentPasteIcon(), func() {
 		pasteClipboardInto(entry, parent)
 	})
-	applyBtn := newCompactConnectionDialogIconButton(theme.ConfirmIcon(), func() {
+	pasteBtn.customNormalBorder = design.ColorTailscaleChipBorder
+
+	checkRes := fyne.NewStaticResource("check.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#111111"><path d="M9 16.2 4.8 12l-1.4 1.4L9 19 21 7l-1.4-1.4L9 16.2z"/></svg>`))
+	applyBtn := newCompactConnectionDialogIconButton(checkRes, func() {
 		ih, th, mk, _, err := parseQRContents(entry.Text)
 		if err != nil {
 			errLabel.Text = "Invalid link format"
@@ -1912,15 +2017,23 @@ func newConnectionDialogInlinePasteView(parent fyne.Window, onApply func(interna
 		reset()
 		onApply(ih, th, mk)
 	})
-	// X on the left, Paste+Apply grouped on the right -- same left/right
-	// split the dialog's own footer uses for Cancel vs. Connect/Save.
-	actionsRow := container.NewHBox(closeBtn, layout.NewSpacer(), pasteBtn, applyBtn)
+	applyBtn.opaqueIcon = true
+	applyBtn.customNormalFill = design.ColorConnectionBadgeText
+	applyBtn.customHoverFill = color.NRGBA{R: 0x61, G: 0xf0, B: 0xd3, A: 0xff}
+	applyBtn.customNormalBorder = color.Transparent
+	applyBtn.customHoverBorder = color.Transparent
+
+	actionsLeft := container.NewHBox(closeBtn, view.NewInset(container.NewCenter(errLabel), 8, 0, 0, 0))
+	actionsRight := container.NewHBox(pasteBtn, applyBtn)
+	actionsRow := container.NewBorder(nil, nil, actionsLeft, actionsRight)
 
 	bg := canvas.NewRectangle(design.ColorGray950)
 	bg.CornerRadius = 6
 	bg.StrokeColor = design.ColorTailscaleChipBorder
 	bg.StrokeWidth = 1
-	body := container.NewVBox(entry, errLabel, view.NewInset(actionsRow, 0, 0, 8, 0))
+
+	entryThemed := container.NewThemeOverride(entry, &pasteEntryTheme{Theme: design.NewBrandTheme()})
+	body := container.NewBorder(nil, view.NewInset(actionsRow, 0, 0, 4, 0), nil, nil, entryThemed)
 	return container.NewStack(bg, view.NewInset(body, 12, 12, 10, 8))
 }
 

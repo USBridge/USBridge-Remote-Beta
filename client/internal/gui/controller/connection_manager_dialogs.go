@@ -1118,17 +1118,23 @@ func showConnectionEditorDialog(parent fyne.Window, window fyne.Window, spec con
 		updateRegisterVisibility(text)
 	}
 
-	normalForm := buildConnectionDialogForm(statsBox, registerCheckContainer)
-	// formSwap holds exactly one child at a time -- normalForm normally,
-	// swapped out for the inline paste view (below) while "Paste Link" is
-	// active, and back again on Cancel/Apply. A single-child Stack sizes to
-	// that one child's own MinSize, so the panel reflows to whichever is
-	// showing (see d.Refresh() calls at each swap site).
-	formSwap := container.NewStack(normalForm)
+	// formSwap holds exactly one child at a time -- statsBox (the Name/LAN/
+	// TS/Token fields) normally, swapped out for the inline paste view
+	// (below) while "Paste Link" is active, and back again on Cancel/Apply.
+	// A single-child Stack sizes to that one child's own MinSize, so the
+	// panel reflows to whichever is showing (see d.Refresh() calls at each
+	// swap site). registerCheckContainer sits OUTSIDE this swap, in
+	// buildConnectionDialogForm below -- whether we know the connection is
+	// LAN-only (so Tailscale auto-register applies) isn't something opening
+	// the paste view changes; only actually applying a pasted link (which
+	// runs tsEntry through the same OnChanged/updateRegisterVisibility path
+	// as typing) should hide or show it.
+	formSwap := container.NewStack(statsBox)
+	normalForm := buildConnectionDialogForm(formSwap, registerCheckContainer)
 
 	var d *widget.PopUp
 
-	var formContent fyne.CanvasObject = formSwap
+	var formContent fyne.CanvasObject = normalForm
 	var mobileFooter fyne.CanvasObject
 	if spec.onQR != nil {
 		qrBtn := newConnectionDialogWideActionButton("Scan QR", assets.QRCodeTeal, design.ColorConnectionBadgeText, func() {
@@ -1139,7 +1145,7 @@ func showConnectionEditorDialog(parent fyne.Window, window fyne.Window, spec con
 		})
 
 		showNormalFields := func() {
-			formSwap.Objects = []fyne.CanvasObject{normalForm}
+			formSwap.Objects = []fyne.CanvasObject{statsBox}
 			formSwap.Refresh()
 			if d != nil {
 				d.Refresh()
@@ -1182,7 +1188,7 @@ func showConnectionEditorDialog(parent fyne.Window, window fyne.Window, spec con
 				// nothing between them otherwise.
 				view.NewInset(iconRow, 0, 0, 14, 0),
 				view.NewInset(newConnectionDialogManualDivider(), 0, 0, 14, 10),
-				formSwap,
+				normalForm,
 			)
 		}
 	}

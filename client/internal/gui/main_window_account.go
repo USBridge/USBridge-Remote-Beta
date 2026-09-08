@@ -12,12 +12,46 @@ import (
 	"usbridge-client/internal/gui/design"
 	"usbridge-client/internal/gui/view"
 
+	_ "embed"
+	_ "golang.org/x/image/webp"
+
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
+
+//go:embed assets/google-logo-rounded-google-logo-google-gradient-logo-free-png.webp
+var googleLogoBytes []byte
+
+type loginBtnTheme struct {
+	fyne.Theme
+}
+
+func (t *loginBtnTheme) Color(name fyne.ThemeColorName, v fyne.ThemeVariant) color.Color {
+	if name == theme.ColorNamePrimary {
+		return color.NRGBA{R: 0xc4, G: 0xe7, B: 0x7a, A: 0xff} // Lime green
+	}
+	if name == theme.ColorNameForegroundOnPrimary {
+		return color.NRGBA{R: 0x4c, G: 0x68, B: 0x03, A: 0xff} // 4c6803
+	}
+	return t.Theme.Color(name, v)
+}
+
+func (t *loginBtnTheme) Size(name fyne.ThemeSizeName) float32 {
+	if name == theme.SizeNameText {
+		return 11 // slightly smaller text
+	}
+	if name == theme.SizeNameInlineIcon {
+		return 16 // smaller icon
+	}
+	if strings.HasSuffix(string(name), "Radius") {
+		return 8 // more rounded edges
+	}
+	return t.Theme.Size(name)
+}
 
 // accountDialogSnapshot is the subset of AccountManager state that actually
 // changes what showAccountDialog's body needs to look like -- compared
@@ -179,15 +213,20 @@ func (mw *MainWindow) showAccountDialog() {
 		default:
 			intro := widget.NewLabel("Log in to see your USBridge licenses and sync your saved connections across devices.")
 			intro.Wrapping = fyne.TextWrapWord
-			body.Add(intro)
+			intro.Alignment = fyne.TextAlignCenter
+			styledIntro := wrapAccountField(intro, 12, color.NRGBA{R: 0xc5, G: 0xc8, B: 0xb5, A: 0xff})
+			body.Add(styledIntro)
 
-			loginBtn := widget.NewButton("Log in with Google", func() {
+			googleIcon := fyne.NewStaticResource("google.webp", googleLogoBytes)
+
+			loginBtn := widget.NewButtonWithIcon("Log in with Google", googleIcon, func() {
 				if err := am.StartLogin(); err == nil {
 					render()
 				}
 			})
 			loginBtn.Importance = widget.HighImportance
-			body.Add(container.NewCenter(loginBtn))
+			styledLoginBtn := container.NewThemeOverride(loginBtn, &loginBtnTheme{Theme: theme.DefaultTheme()})
+			body.Add(container.NewCenter(styledLoginBtn))
 
 			if errMsg := am.LastError(); errMsg != "" {
 				errText := canvas.NewText(errMsg, design.ColorAlert)
@@ -199,8 +238,13 @@ func (mw *MainWindow) showAccountDialog() {
 		footerContainer.Refresh()
 
 		if scroll != nil {
-			scroll.Content = view.NewInset(body, 21, 21, 14, 18)
-			scroll.SetMinSize(fyne.NewSize(0, 200))
+			if am.LoggedIn() {
+				scroll.Content = view.NewInset(body, 21, 21, 14, 18)
+				scroll.SetMinSize(fyne.NewSize(0, 200))
+			} else {
+				scroll.Content = view.NewInset(body, 21, 21, 2, 12)
+				scroll.SetMinSize(fyne.NewSize(0, 110)) // completely tight
+			}
 			scroll.Refresh()
 		}
 	}
@@ -230,8 +274,13 @@ func (mw *MainWindow) showAccountDialog() {
 	// below) -- same reasoning as the Add Connection dialog's own header.
 	header := container.NewVBox(topAccent, view.NewInset(title, 21, 44, 9, 4), sep)
 
-	scroll = container.NewVScroll(view.NewInset(body, 21, 21, 14, 18))
-	scroll.SetMinSize(fyne.NewSize(0, 195))
+	if am.LoggedIn() {
+		scroll = container.NewVScroll(view.NewInset(body, 21, 21, 14, 18))
+		scroll.SetMinSize(fyne.NewSize(0, 200))
+	} else {
+		scroll = container.NewVScroll(view.NewInset(body, 21, 21, 2, 12))
+		scroll.SetMinSize(fyne.NewSize(0, 110))
+	}
 
 	bg := canvas.NewRectangle(design.ColorGray900)
 	bg.CornerRadius = design.RadiusMD
@@ -589,7 +638,9 @@ func accountSyncPassphraseSection(cm *controller.ConnectionManager, am *controll
 		styledEntry := wrapAccountField(entry, 10, color.NRGBA{R: 0xe9, G: 0xfd, B: 0xbb, A: 0xff})
 
 		statusLabel := widget.NewLabel("")
-		statusLabel.Hide()
+		statusLabel.Wrapping = fyne.TextWrapWord
+		styledStatus := wrapAccountField(statusLabel, 12, color.NRGBA{R: 0x8f, G: 0x93, B: 0x81, A: 0xff})
+		styledStatus.Hide()
 
 		var resetBtn, cancelBtn fyne.CanvasObject
 
@@ -598,7 +649,7 @@ func accountSyncPassphraseSection(cm *controller.ConnectionManager, am *controll
 				return
 			}
 			statusLabel.SetText("Resetting...")
-			statusLabel.Show()
+			styledStatus.Show()
 			styledEntry.Hide()
 			resetBtn.Hide()
 			cancelBtn.Hide()
@@ -625,7 +676,7 @@ func accountSyncPassphraseSection(cm *controller.ConnectionManager, am *controll
 			render()
 		})
 
-		return container.New(&tightVBoxLayout{}, titleRow, styledWarn, styledEntry, statusLabel), container.NewHBox(cancelBtn, resetBtn)
+		return container.New(&tightVBoxLayout{}, titleRow, styledWarn, styledEntry, styledStatus), container.NewHBox(cancelBtn, resetBtn)
 	}
 
 	label := widget.NewLabel("Set a sync passphrase to sync your saved connections across devices (never sent to our servers):")

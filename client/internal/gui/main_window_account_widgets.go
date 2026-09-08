@@ -409,8 +409,8 @@ func newAccountDialogTextButton(text string, onTapped func()) *accountDialogText
 }
 
 func (b *accountDialogTextButton) CreateRenderer() fyne.WidgetRenderer {
-	b.lbl = canvas.NewText(b.text, design.ColorTextMuted)
-	b.lbl.TextSize = 11
+	b.lbl = canvas.NewText(b.text, color.NRGBA{R: 0x8f, G: 0x93, B: 0x81, A: 0xff})
+	b.lbl.TextSize = 10
 	b.lbl.TextStyle = fyne.TextStyle{Bold: true}
 	// Add some padding to match heights visually
 	return widget.NewSimpleRenderer(view.NewInset(b.lbl, 8, 8, 3, 3))
@@ -452,7 +452,7 @@ func (b *accountDialogTextButton) refreshVisuals() {
 	if b.hovered {
 		b.lbl.Color = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0xff}
 	} else {
-		b.lbl.Color = design.ColorTextMuted
+		b.lbl.Color = color.NRGBA{R: 0x8f, G: 0x93, B: 0x81, A: 0xff}
 	}
 	b.lbl.Refresh()
 }

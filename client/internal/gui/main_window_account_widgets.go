@@ -17,7 +17,7 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/theme"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/widget"
 )
 
@@ -25,7 +25,7 @@ import (
 // background -- just enough for the identity/sync cards to read as
 // distinct panels sitting on it, without introducing a whole new surface
 // color for one dialog.
-var accountCardBg = color.NRGBA{R: 0x1e, G: 0x23, B: 0x1f, A: 0xff}
+var accountCardBg = color.NRGBA{R: 0x18, G: 0x1c, B: 0x1f, A: 0xff}
 
 // newAccountCard wraps content in the rounded, bordered panel both the
 // "authenticated user" and "connections sync" sections use -- same
@@ -67,10 +67,10 @@ func newAccountEyebrowLabel(text string) fyne.CanvasObject {
 func newAccountAvatarBadge(letter string) fyne.CanvasObject {
 	bg := canvas.NewRectangle(design.ColorConnectionBadgeText)
 	bg.CornerRadius = design.RadiusLG
-	bg.SetMinSize(fyne.NewSize(44, 44))
+	bg.SetMinSize(fyne.NewSize(36, 36))
 
 	label := canvas.NewText(letter, design.ColorGray950)
-	label.TextSize = 18
+	label.TextSize = 16
 	label.TextStyle = fyne.TextStyle{Bold: true}
 	label.Alignment = fyne.TextAlignCenter
 
@@ -82,20 +82,27 @@ func newAccountAvatarBadge(letter string) fyne.CanvasObject {
 // own doc comment for why: there is no separate enable/disable toggle here,
 // sync is simply "on" once a passphrase has been set).
 func newAccountStatusPill(label string, on bool) fyne.CanvasObject {
-	text := canvas.NewText(strings.ToUpper(label), design.ColorGray950)
+	var textColor color.Color
+	var borderColor color.Color
+
+	if on {
+		textColor = design.ColorConnectionAddFill
+		borderColor = design.ColorConnectionAddFill
+	} else {
+		textColor = design.ColorTextMuted
+		borderColor = design.ColorBorder
+	}
+
+	text := canvas.NewText(strings.ToUpper(label), textColor)
 	text.TextSize = 9
 	text.TextStyle = fyne.TextStyle{Bold: true}
 
-	bg := canvas.NewRectangle(design.ColorConnectionAddFill)
-	bg.CornerRadius = 8
-	if !on {
-		bg.FillColor = design.ColorConnectionBadgeFill
-		bg.StrokeColor = design.ColorBorder
-		bg.StrokeWidth = 1
-		text.Color = design.ColorTextMuted
-	}
+	bg := canvas.NewRectangle(color.Transparent)
+	bg.CornerRadius = 4
+	bg.StrokeColor = borderColor
+	bg.StrokeWidth = 1
 
-	return container.NewStack(bg, view.NewInset(text, 6, 6, 3, 3))
+	return container.NewStack(bg, view.NewInset(text, 6, 6, 1, 1))
 }
 
 // licenseStatusColor maps a license's raw Status string (see
@@ -117,6 +124,8 @@ func licenseStatusColor(status string) color.Color {
 // ● status", with a copy-to-clipboard button pinned to the row's right edge
 // -- the styled equivalent of the old plain
 // "[%s] %s — %s" label (see renderLicenses).
+var accountDialogCopyIconRes = fyne.NewStaticResource("copy_colored.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#ebffbc"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>`))
+
 func newAccountLicenseRow(kind, identifier, status string, window fyne.Window) fyne.CanvasObject {
 	kindText := canvas.NewText("["+kind+"]", design.ColorConnectionBadgeText)
 	kindText.TextSize = 11
@@ -126,17 +135,228 @@ func newAccountLicenseRow(kind, identifier, status string, window fyne.Window) f
 	idText.TextSize = 11
 
 	statusColor := licenseStatusColor(status)
-	statusText := canvas.NewText("— ● "+status, statusColor)
+	statusText := canvas.NewText("— "+status, statusColor)
 	statusText.TextSize = 11
 
-	left := container.New(&centeredInlineLayout{gap: 6, minGap: 4}, kindText, idText, statusText)
+	left := container.NewHBox(kindText, idText, statusText)
 
-	copyBtn := widget.NewButtonWithIcon("", theme.ContentCopyIcon(), func() {
+	copyBtn := newAccountDialogIconButton(accountDialogCopyIconRes, func() {
 		if window != nil && window.Clipboard() != nil {
 			window.Clipboard().SetContent(identifier)
 		}
 	})
-	copyBtn.Importance = widget.LowImportance
+	copyBtn.opaqueIcon = true
+	copyBtn.iconSize = 14
+	copyBtn.buttonSize = 24
 
 	return container.NewBorder(nil, nil, nil, copyBtn, left)
+}
+
+type accountDialogLinkButton struct {
+	widget.BaseWidget
+	prefix   string
+	linkText string
+	onTapped func()
+	hovered  bool
+
+	lbl1 *canvas.Text
+	lbl2 *canvas.Text
+	line *canvas.Rectangle
+}
+
+func newAccountDialogLinkButton(prefix, linkText string, onTapped func()) *accountDialogLinkButton {
+	b := &accountDialogLinkButton{prefix: prefix, linkText: linkText, onTapped: onTapped}
+	b.ExtendBaseWidget(b)
+	return b
+}
+
+type accountLinkHBoxLayout struct{}
+
+func (l *accountLinkHBoxLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	if len(objects) < 3 {
+		return fyne.NewSize(0, 0)
+	}
+	m1 := objects[0].MinSize()
+	m2 := objects[1].MinSize()
+	h := m1.Height
+	if m2.Height > h {
+		h = m2.Height
+	}
+	return fyne.NewSize(m1.Width+m2.Width, h)
+}
+
+func (l *accountLinkHBoxLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	if len(objects) < 3 {
+		return
+	}
+	m1 := objects[0].MinSize()
+	m2 := objects[1].MinSize()
+
+	// Both texts at Y=0 so baselines exactly match (same font and size)
+	objects[0].Resize(m1)
+	objects[0].Move(fyne.NewPos(0, 0))
+
+	objects[1].Resize(m2)
+	objects[1].Move(fyne.NewPos(m1.Width, 0))
+
+	objects[2].Resize(fyne.NewSize(m2.Width, 1))
+	objects[2].Move(fyne.NewPos(m1.Width, m2.Height-3))
+}
+
+func (b *accountDialogLinkButton) CreateRenderer() fyne.WidgetRenderer {
+	b.lbl1 = canvas.NewText(b.prefix, color.NRGBA{R: 0x8f, G: 0x93, B: 0x81, A: 0xff})
+	b.lbl1.TextSize = 11
+	b.lbl1.TextStyle = fyne.TextStyle{Bold: true}
+
+	b.lbl2 = canvas.NewText(b.linkText, design.ColorConnectionAddFill)
+	b.lbl2.TextSize = 11
+	b.lbl2.TextStyle = fyne.TextStyle{Bold: true}
+
+	b.line = canvas.NewRectangle(design.ColorConnectionAddFill)
+	b.line.SetMinSize(fyne.NewSize(0, 1))
+
+	content := container.New(&accountLinkHBoxLayout{}, b.lbl1, b.lbl2, b.line)
+	return widget.NewSimpleRenderer(content)
+}
+
+func (b *accountDialogLinkButton) MinSize() fyne.Size {
+	b.ExtendBaseWidget(b)
+	return b.BaseWidget.MinSize()
+}
+
+func (b *accountDialogLinkButton) Tapped(*fyne.PointEvent) {
+	if b.onTapped != nil {
+		b.onTapped()
+	}
+}
+
+func (b *accountDialogLinkButton) TappedSecondary(*fyne.PointEvent) {}
+
+func (b *accountDialogLinkButton) Cursor() desktop.Cursor {
+	return desktop.PointerCursor
+}
+
+func (b *accountDialogLinkButton) MouseIn(*desktop.MouseEvent) {
+	b.hovered = true
+	b.refreshVisuals()
+}
+
+func (b *accountDialogLinkButton) MouseMoved(*desktop.MouseEvent) {}
+
+func (b *accountDialogLinkButton) MouseOut() {
+	b.hovered = false
+	b.refreshVisuals()
+}
+
+func (b *accountDialogLinkButton) refreshVisuals() {
+	if b.lbl1 == nil {
+		return
+	}
+	hoverColor := color.NRGBA{R: 0xd6, G: 0xf7, B: 0x9c, A: 0xff} // Lighter green
+	if b.hovered {
+		b.lbl2.Color = hoverColor
+		b.line.FillColor = hoverColor
+	} else {
+		b.lbl2.Color = design.ColorConnectionAddFill
+		b.line.FillColor = design.ColorConnectionAddFill
+	}
+	b.lbl2.Refresh()
+	b.line.Refresh()
+}
+
+// accountDialogLogoutButton is the "Log out" footer button: a small
+// bordered chip with an icon + label that swaps to a red hover state.
+type accountDialogLogoutButton struct {
+	widget.BaseWidget
+	onTapped func()
+	hovered  bool
+
+	iconNormal fyne.Resource
+	iconHover  fyne.Resource
+
+	bg   *canvas.Rectangle
+	bdr  *canvas.Rectangle
+	icon *canvas.Image
+	lbl  *canvas.Text
+}
+
+func newAccountDialogLogoutButton(onTapped func()) *accountDialogLogoutButton {
+	b := &accountDialogLogoutButton{
+		onTapped:   onTapped,
+		iconNormal: fyne.NewStaticResource("logout.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#e0e3e7"><path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/></svg>`)),
+		iconHover:  fyne.NewStaticResource("logout_hover.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#ed6b7f"><path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z"/></svg>`)),
+	}
+	b.ExtendBaseWidget(b)
+	return b
+}
+
+func (b *accountDialogLogoutButton) CreateRenderer() fyne.WidgetRenderer {
+	b.bg = canvas.NewRectangle(color.NRGBA{R: 0x23, G: 0x27, B: 0x2a, A: 0xff})
+	b.bg.CornerRadius = 6
+
+	b.bdr = canvas.NewRectangle(color.Transparent)
+	b.bdr.StrokeWidth = 1
+	b.bdr.StrokeColor = color.NRGBA{R: 0x44, G: 0x48, B: 0x39, A: 0xff}
+	b.bdr.CornerRadius = 6
+
+	b.icon = canvas.NewImageFromResource(b.iconNormal)
+	b.icon.SetMinSize(fyne.NewSize(14, 14))
+	b.icon.FillMode = canvas.ImageFillContain
+
+	b.lbl = canvas.NewText("Log out", color.NRGBA{R: 0xe0, G: 0xe3, B: 0xe7, A: 0xff})
+	b.lbl.TextSize = 11
+	b.lbl.TextStyle = fyne.TextStyle{Bold: true}
+
+	content := container.NewHBox(b.icon, b.lbl)
+	return widget.NewSimpleRenderer(container.NewStack(b.bg, b.bdr, view.NewInset(content, 12, 12, 3, 3)))
+}
+
+func (b *accountDialogLogoutButton) MinSize() fyne.Size {
+	b.ExtendBaseWidget(b)
+	return b.BaseWidget.MinSize()
+}
+
+func (b *accountDialogLogoutButton) Tapped(*fyne.PointEvent) {
+	if b.onTapped != nil {
+		b.onTapped()
+	}
+}
+
+func (b *accountDialogLogoutButton) TappedSecondary(*fyne.PointEvent) {}
+
+func (b *accountDialogLogoutButton) Cursor() desktop.Cursor {
+	return desktop.PointerCursor
+}
+
+func (b *accountDialogLogoutButton) MouseIn(*desktop.MouseEvent) {
+	b.hovered = true
+	b.refreshVisuals()
+}
+
+func (b *accountDialogLogoutButton) MouseMoved(*desktop.MouseEvent) {}
+
+func (b *accountDialogLogoutButton) MouseOut() {
+	b.hovered = false
+	b.refreshVisuals()
+}
+
+func (b *accountDialogLogoutButton) refreshVisuals() {
+	if b.bg == nil {
+		return
+	}
+	if b.hovered {
+		b.bg.FillColor = color.NRGBA{R: 0x1d, G: 0x13, B: 0x1b, A: 0xff}
+		b.bdr.StrokeColor = color.NRGBA{R: 0x4e, G: 0x13, B: 0x28, A: 0xff}
+		b.lbl.Color = color.NRGBA{R: 0xed, G: 0x6b, B: 0x7f, A: 0xff}
+		b.icon.Resource = b.iconHover
+	} else {
+		b.bg.FillColor = color.NRGBA{R: 0x23, G: 0x27, B: 0x2a, A: 0xff}
+		b.bdr.StrokeColor = color.NRGBA{R: 0x44, G: 0x48, B: 0x39, A: 0xff}
+		b.lbl.Color = color.NRGBA{R: 0xe0, G: 0xe3, B: 0xe7, A: 0xff}
+		b.icon.Resource = b.iconNormal
+	}
+	b.bg.Refresh()
+	b.bdr.Refresh()
+	b.lbl.Refresh()
+	b.icon.Refresh()
 }

@@ -74,9 +74,12 @@ func (mw *MainWindow) showAccountDialog() {
 	// call, so anything that must survive across renders lives out here).
 	var resettingSyncPassphrase bool
 
+	footerContainer := container.NewStack()
+
 	var render func()
 	render = func() {
 		body.RemoveAll()
+		footerContainer.Objects = nil
 
 		switch {
 		case am.LoginInProgress():
@@ -94,14 +97,14 @@ func (mw *MainWindow) showAccountDialog() {
 			if trimmed := strings.TrimSpace(am.Email()); trimmed != "" {
 				letter = strings.ToUpper(string([]rune(trimmed)[0]))
 			}
-			signedInLabel := canvas.NewText("Signed in as", design.ColorTextMuted)
+			signedInLabel := canvas.NewText("Signed in as", color.NRGBA{R: 0x8f, G: 0x93, B: 0x81, A: 0xff})
 			signedInLabel.TextSize = 10
 			emailText := canvas.NewText(am.Email(), design.ColorTextLight)
 			emailText.TextSize = 13
 			emailText.TextStyle = fyne.TextStyle{Bold: true}
 			identityHeader := container.NewHBox(
 				newAccountAvatarBadge(letter),
-				container.NewVBox(signedInLabel, emailText),
+				view.NewInset(container.NewVBox(signedInLabel, emailText), 10, 0, 0, 0),
 			)
 
 			identityBody := container.NewVBox(identityHeader)
@@ -110,40 +113,49 @@ func (mw *MainWindow) showAccountDialog() {
 				errText.TextSize = 11
 				identityBody.Add(errText)
 			}
-			identityBody.Add(newAccountDivider())
+			identityBody.Add(view.NewInset(newAccountDivider(), 0, 0, 2, 0))
 			identityBody.Add(accountLicensesList(am, &licensesLoaded, &licensesCache, &licensesErr, mw.window, render))
 
-			body.Add(newAccountEyebrowLabel("Authenticated user"))
+			identityBody.Add(newAccountDivider())
+			identityBody.Add(accountSyncPassphraseSection(cm, am, &resettingSyncPassphrase, render))
+
 			body.Add(newAccountCard(identityBody))
-			body.Add(newAccountCard(accountSyncPassphraseSection(cm, am, &resettingSyncPassphrase, render)))
 
 			var footerLeft fyne.CanvasObject
 			if am.HasSyncKey() && !resettingSyncPassphrase {
-				forgotBtn := widget.NewButton("Forgot passphrase? Reset it", func() {
+				footerLeft = newAccountDialogLinkButton("Forgot passphrase? ", "Reset it", func() {
 					resettingSyncPassphrase = true
 					render()
 				})
-				forgotBtn.Importance = widget.LowImportance
-				footerLeft = forgotBtn
 			}
 
-			logoutBtn := widget.NewButton("Log out", func() {
+			logoutBtn := newAccountDialogLogoutButton(func() {
 				am.Logout()
-				// Forget the cached license list too -- otherwise logging
-				// back in within the same dialog session (LoggedIn()
-				// flips true again on the next poll tick) would show the
-				// PREVIOUS login's stale cached licenses instead of
-				// re-fetching for the new one.
 				licensesLoaded = false
 				licensesCache = nil
 				licensesErr = nil
 				resettingSyncPassphrase = false
 				render()
 			})
-			logoutBtn.Importance = widget.DangerImportance
 
-			body.Add(newAccountDivider())
-			body.Add(container.NewBorder(nil, nil, footerLeft, logoutBtn))
+			// footerLeft is nil whenever there's no "Forgot passphrase?" link
+			// to show (no sync key yet, or a reset is in progress) --
+			// container.NewCenter does NOT filter nil objects out of its own
+			// Objects slice, so wrapping a nil footerLeft in NewCenter here
+			// would panic the first time CenterLayout.Layout/MinSize calls a
+			// method on that nil entry. Only wrap when there's something to
+			// center; container.NewBorder's own "left" param already treats
+			// nil as "no left edge" safely.
+			var footerLeftCentered fyne.CanvasObject
+			if footerLeft != nil {
+				footerLeftCentered = container.NewCenter(footerLeft)
+			}
+			footerBar := container.NewBorder(nil, nil, footerLeftCentered, logoutBtn)
+			footerArea := container.NewVBox(
+				newAccountDivider(),
+				view.NewInset(footerBar, 21, 21, 14, 18),
+			)
+			footerContainer.Objects = []fyne.CanvasObject{footerArea}
 
 		default:
 			intro := widget.NewLabel("Log in to see your USBridge licenses and sync your saved connections across devices.")
@@ -162,6 +174,7 @@ func (mw *MainWindow) showAccountDialog() {
 		}
 
 		body.Refresh()
+		footerContainer.Refresh()
 	}
 	render()
 
@@ -177,7 +190,7 @@ func (mw *MainWindow) showAccountDialog() {
 	}
 
 	title := view.NewBrandText("Account", 13, design.ColorTextLight, true)
-	closeBtn := newAccountDialogCloseButton(closeDialog)
+	closeBtn := newAccountDialogIconButton(accountDialogCloseIcon, closeDialog)
 	topAccent := newAccountDialogTopAccentBar()
 
 	sep := canvas.NewRectangle(color.NRGBA{R: 0x30, G: 0x34, B: 0x2e, A: 0xff})
@@ -193,7 +206,7 @@ func (mw *MainWindow) showAccountDialog() {
 	// Explicit min size -- ScrollVerticalOnly's own MinSize otherwise stays
 	// frozen at whatever was last set (0 here, never set), which would
 	// collapse the dialog to the header's height alone on first layout.
-	scroll.SetMinSize(fyne.NewSize(0, 220))
+	scroll.SetMinSize(fyne.NewSize(0, 195))
 
 	bg := canvas.NewRectangle(design.ColorGray900)
 	bg.CornerRadius = design.RadiusMD
@@ -211,7 +224,7 @@ func (mw *MainWindow) showAccountDialog() {
 
 	panel := container.NewStack(
 		bg,
-		container.NewBorder(header, nil, nil, nil, scroll),
+		container.NewBorder(header, footerContainer, nil, nil, scroll),
 		cornerBtn,
 		border,
 	)
@@ -271,32 +284,43 @@ func (mw *MainWindow) showAccountDialog() {
 // rather than exported across the package boundary just for this.
 var accountDialogCloseIcon = fyne.NewStaticResource("account_dialog_cancel.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#8f9381"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>`))
 
-// accountDialogCloseButton is a minimal transparent-until-hovered icon
-// button -- a trimmed-down copy of the Add Connection dialog's own close
-// button (controller.connectionDialogIconButton) for this one use: no
-// disabled state, no custom colors, just the same look.
-type accountDialogCloseButton struct {
+// accountDialogIconButton is a minimal transparent-until-hovered icon
+// button -- originally a trimmed-down copy of the Add Connection dialog's
+// own close button (controller.connectionDialogIconButton), generalized to
+// take any icon resource/size (see the close button and the license row's
+// copy button, both built on this).
+type accountDialogIconButton struct {
 	widget.BaseWidget
 
+	resource fyne.Resource
 	onTapped func()
 	hovered  bool
+
+	opaqueIcon bool
+	iconSize   float32
+	buttonSize float32
 
 	bg   *canvas.Rectangle
 	bdr  *canvas.Rectangle
 	icon *canvas.Image
 }
 
-func newAccountDialogCloseButton(onTapped func()) *accountDialogCloseButton {
-	b := &accountDialogCloseButton{onTapped: onTapped}
+func newAccountDialogIconButton(resource fyne.Resource, onTapped func()) *accountDialogIconButton {
+	b := &accountDialogIconButton{
+		resource:   resource,
+		onTapped:   onTapped,
+		iconSize:   18,
+		buttonSize: 28,
+	}
 	b.ExtendBaseWidget(b)
 	return b
 }
 
-func (b *accountDialogCloseButton) MinSize() fyne.Size {
-	return fyne.NewSize(28, 28)
+func (b *accountDialogIconButton) MinSize() fyne.Size {
+	return fyne.NewSize(b.buttonSize, b.buttonSize)
 }
 
-func (b *accountDialogCloseButton) CreateRenderer() fyne.WidgetRenderer {
+func (b *accountDialogIconButton) CreateRenderer() fyne.WidgetRenderer {
 	b.bg = canvas.NewRectangle(color.Transparent)
 	b.bg.CornerRadius = 6
 
@@ -304,51 +328,57 @@ func (b *accountDialogCloseButton) CreateRenderer() fyne.WidgetRenderer {
 	b.bdr.CornerRadius = 6
 	b.bdr.StrokeWidth = 1
 
-	b.icon = canvas.NewImageFromResource(accountDialogCloseIcon)
+	b.icon = canvas.NewImageFromResource(b.resource)
 	b.icon.FillMode = canvas.ImageFillContain
 	b.icon.ScaleMode = canvas.ImageScaleSmooth
-	b.icon.SetMinSize(fyne.NewSize(18, 18))
-	b.icon.Translucency = 0.32
+	b.icon.SetMinSize(fyne.NewSize(b.iconSize, b.iconSize))
+	if !b.opaqueIcon {
+		b.icon.Translucency = 0.32
+	}
 
 	return widget.NewSimpleRenderer(container.NewStack(b.bg, b.bdr, container.NewCenter(b.icon)))
 }
 
-func (b *accountDialogCloseButton) Tapped(*fyne.PointEvent) {
+func (b *accountDialogIconButton) Tapped(*fyne.PointEvent) {
 	if b.onTapped != nil {
 		b.onTapped()
 	}
 }
 
-func (b *accountDialogCloseButton) TappedSecondary(*fyne.PointEvent) {}
+func (b *accountDialogIconButton) TappedSecondary(*fyne.PointEvent) {}
 
-func (b *accountDialogCloseButton) Cursor() desktop.Cursor {
+func (b *accountDialogIconButton) Cursor() desktop.Cursor {
 	return desktop.PointerCursor
 }
 
-func (b *accountDialogCloseButton) MouseIn(*desktop.MouseEvent) {
+func (b *accountDialogIconButton) MouseIn(*desktop.MouseEvent) {
 	b.hovered = true
 	b.refreshVisuals()
 }
 
-func (b *accountDialogCloseButton) MouseMoved(*desktop.MouseEvent) {}
+func (b *accountDialogIconButton) MouseMoved(*desktop.MouseEvent) {}
 
-func (b *accountDialogCloseButton) MouseOut() {
+func (b *accountDialogIconButton) MouseOut() {
 	b.hovered = false
 	b.refreshVisuals()
 }
 
-func (b *accountDialogCloseButton) refreshVisuals() {
+func (b *accountDialogIconButton) refreshVisuals() {
 	if b.bg == nil {
 		return
 	}
 	if b.hovered {
 		b.bg.FillColor = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0x10}
 		b.bdr.StrokeColor = color.NRGBA{R: 0x8f, G: 0x93, B: 0x81, A: 0xff}
-		b.icon.Translucency = 0.08
+		if !b.opaqueIcon {
+			b.icon.Translucency = 0.08
+		}
 	} else {
 		b.bg.FillColor = color.Transparent
 		b.bdr.StrokeColor = color.Transparent
-		b.icon.Translucency = 0.32
+		if !b.opaqueIcon {
+			b.icon.Translucency = 0.32
+		}
 	}
 	b.bg.Refresh()
 	b.bdr.Refresh()
@@ -464,19 +494,47 @@ func renderLicenses(licenses []account.License, err error, window fyne.Window) f
 // deliberately overwrites the account's synced data instead of merging
 // with it, since nothing can decrypt the old blob anymore once its
 // passphrase is forgotten).
+type tightVBoxLayout struct{}
+
+func (t *tightVBoxLayout) MinSize(objects []fyne.CanvasObject) fyne.Size {
+	var size fyne.Size
+	for _, o := range objects {
+		m := o.MinSize()
+		if m.Width > size.Width {
+			size.Width = m.Width
+		}
+		size.Height += m.Height
+	}
+	return size
+}
+
+func (t *tightVBoxLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	y := float32(0)
+	for _, o := range objects {
+		m := o.MinSize()
+		o.Move(fyne.NewPos(0, y))
+		o.Resize(fyne.NewSize(size.Width, m.Height))
+		y += m.Height
+	}
+}
+
 func accountSyncPassphraseSection(cm *controller.ConnectionManager, am *controller.AccountManager, resetting *bool, render func()) fyne.CanvasObject {
 	titleText := canvas.NewText("Connections sync", design.ColorTextLight)
 	titleText.TextSize = 12
 	titleText.TextStyle = fyne.TextStyle{Bold: true}
 
 	on := am.HasSyncKey() && !*resetting
-	titleRow := container.New(&centeredInlineLayout{gap: 8, minGap: 6}, titleText, newAccountStatusPill(map[bool]string{true: "on", false: "off"}[on], on))
+	pill := newAccountStatusPill(map[bool]string{true: "on", false: "off"}[on], on)
 
 	if on {
-		desc := canvas.NewText("End-to-end encrypted sync of your saved connections across devices.", design.ColorTextMuted)
-		desc.TextSize = 11
-		return container.NewVBox(titleRow, desc)
+		desc := canvas.NewText("End-to-end encrypted sync of your saved connections across devices.", color.NRGBA{R: 0x8f, G: 0x93, B: 0x81, A: 0xff})
+		desc.TextSize = 8
+		textBlock := container.New(&tightVBoxLayout{}, titleText, desc)
+		shiftedPill := view.NewInset(pill, 0, 0, 2, 0)
+		return view.NewInset(container.NewBorder(nil, nil, nil, container.NewCenter(shiftedPill), textBlock), 0, 0, 4, 0)
 	}
+
+	titleRow := container.NewBorder(nil, nil, titleText, view.NewInset(pill, 0, 0, 2, 0))
 
 	if *resetting {
 		warn := widget.NewLabel(

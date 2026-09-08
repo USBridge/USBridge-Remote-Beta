@@ -10,6 +10,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -26,6 +28,59 @@ import (
 // AdminUser is the fixed Sunshine web-UI username.
 const sunshineAdminUser = "sunshine"
 
+// sunshineProcess abstracts a running Sunshine child process regardless of
+// how it was launched -- a plain exec.Cmd (the normal case on every
+// platform), or a process re-homed into the active console session via
+// internal/sessionlaunch (Windows only, when this agent is itself running
+// as the LocalSystem USBridgeAgent service -- see useSunshineSessionBroker's
+// doc comment for why that path exists at all). Mirrors rustshineProcess in
+// rustshine_backend.go exactly, kept as a separate type only because
+// sunshineBackend and rustshineBackend are otherwise fully independent.
+type sunshineProcess interface {
+	Pid() int
+	Kill() error
+	Wait() error
+}
+
+type sunshineExecCmdProcess struct{ cmd *exec.Cmd }
+
+func (p sunshineExecCmdProcess) Pid() int    { return p.cmd.Process.Pid }
+func (p sunshineExecCmdProcess) Kill() error { return p.cmd.Process.Kill() }
+func (p sunshineExecCmdProcess) Wait() error { return p.cmd.Wait() }
+
+// useSunshineSessionBroker reports whether Start should launch Sunshine via
+// sunshineSessionBrokerLaunch (re-homing it into the active console
+// session) instead of as a plain child of this process. Always false except
+// on Windows when this agent is itself running as the LocalSystem
+// USBridgeAgent service (see sunshine_process_windows.go's init) --
+// everywhere else Start()'s own session already has real desktop/display
+// access, so the plain exec.Command path works fine.
+//
+// Why this exists at all: Sunshine enumerates monitors via the Windows CCD
+// API (QueryDisplayConfig), which requires access to the calling process's
+// window station. A LocalSystem service lives permanently in the
+// non-interactive Session 0 (see internal/sessionlaunch's package doc), so
+// QueryDisplayConfig fails there with ERROR_ACCESS_DENIED and Sunshine logs
+// "Currently available display devices: []", falling back to a single fake
+// 1024x768 virtual monitor -- confirmed live on this exact machine.
+// rustshineBackend already re-homes gamestream-server into the active
+// session for the analogous reason (its DXGI enumeration also needs a real
+// session, just for a different underlying API); Sunshine's launch path
+// never got the same treatment until now.
+var useSunshineSessionBroker = func() bool { return false }
+
+// sunshineSessionBrokerLaunch launches Sunshine inside the currently active
+// console session. Set by sunshine_process_windows.go's init on Windows;
+// nil (never called, since useSunshineSessionBroker() is always false) on
+// every other platform.
+var sunshineSessionBrokerLaunch func(exe string, args []string, workDir string, stdout, stderr *os.File) (sunshineProcess, error)
+
+// errSunshineNoActiveSessionMarker lets Start() recognize "no active
+// console session yet" (nobody has reached the logon screen, or a fast-
+// user-switch is mid-transition) without importing internal/sessionlaunch
+// directly -- mirrors errNoActiveSessionMarker in rustshine_backend.go.
+var errSunshineNoActiveSessionMarker = fmt.Errorf("sunshine: no active console session")
+
 // sunshineBackend implements Backend against a bundled Sunshine instance.
 // All state that used to live as package-level globals is an instance field
 // here instead, so a Backend value is self-contained and safe to construct
@@ -37,7 +92,7 @@ type sunshineBackend struct {
 	launchPath  string
 	capExecPath string
 	logPath     string
-	cmd         *exec.Cmd
+	proc        sunshineProcess
 	// watchdog is only used on macOS (see sunshine_process_other.go) — a
 	// detached helper process that kills Sunshine if the agent disappears.
 	// Left nil, and never referenced, on Linux/Windows where the OS itself
@@ -403,19 +458,17 @@ func (b *sunshineBackend) SetCapExecPath(capExecPath string) {
 func (b *sunshineBackend) Running() bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	return b.cmd != nil && b.cmd.Process != nil
+	return b.proc != nil
 }
 
-// Pid always 0 for real Sunshine -- GPU clock locking (see
-// rustshineBackend.Pid's own docs) is a rustshine-only feature, real
-// Sunshine has no equivalent CLI mode to launch.
+// Pid returns the running Sunshine process's PID, or 0 if not running.
 func (b *sunshineBackend) Pid() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.cmd == nil || b.cmd.Process == nil {
+	if b.proc == nil {
 		return 0
 	}
-	return b.cmd.Process.Pid
+	return b.proc.Pid()
 }
 
 // Start launches Sunshine if it isn't already running (by this backend, or
@@ -424,7 +477,7 @@ func (b *sunshineBackend) Pid() int {
 func (b *sunshineBackend) Start(adminPort int) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.cmd != nil && b.cmd.Process != nil {
+	if b.proc != nil {
 		return nil
 	}
 	if b.launchPath == "" {
@@ -518,70 +571,102 @@ func (b *sunshineBackend) Start(adminPort int) error {
 	// resolution. b.capExecPath is only ever set once the capability has
 	// actually been granted (internal/app), so this exec is expected to
 	// succeed whenever it's used.
-	var cmd *exec.Cmd
+	var launchExe string
+	var launchArgs []string
 	if b.capExecPath != "" {
-		cmd = exec.Command(b.capExecPath, append([]string{b.launchPath}, b.sunshineConfigArgs()...)...)
+		launchExe = b.capExecPath
+		launchArgs = append([]string{b.launchPath}, b.sunshineConfigArgs()...)
 	} else {
-		cmd = exec.Command(b.launchPath, b.sunshineConfigArgs()...)
+		launchExe = b.launchPath
+		launchArgs = b.sunshineConfigArgs()
 	}
-	configureProcess(cmd)
+
+	var launchDir string
 	switch runtime.GOOS {
 	case "linux":
 		// Sunshine built with SUNSHINE_BUILD_APPIMAGE=ON uses ./usr/local/assets
 		// relative to cwd. Set cwd to the root of the install tree (3 dirs up from
 		// usr/bin/sunshine), which is either the AppImage $APPDIR or the staging dir.
-		sunshineRoot := filepath.Dir(filepath.Dir(filepath.Dir(b.launchPath)))
-		if sunshineRoot != "" && sunshineRoot != "." {
-			cmd.Dir = sunshineRoot
-		}
+		launchDir = filepath.Dir(filepath.Dir(filepath.Dir(b.launchPath)))
 	default:
 		// Windows (and macOS) Sunshine resolves assets/ relative to its process
 		// cwd, not its own exe path. Without this, launching from the agent
 		// (whose own cwd may differ) breaks shader/asset lookup with
 		// ERROR_PATH_NOT_FOUND while double-clicking sunshine.exe directly
 		// works by accident (Explorer sets cwd to the exe's own folder).
-		if dir := filepath.Dir(b.launchPath); dir != "" && dir != "." {
-			cmd.Dir = dir
-		}
+		launchDir = filepath.Dir(b.launchPath)
 	}
+
+	var logFile *os.File
 	if b.logPath != "" {
 		if err := os.MkdirAll(filepath.Dir(b.logPath), 0o755); err != nil {
 			log.Printf("[sunshine] failed to create log dir for %s: %v", b.logPath, err)
 		} else if f, err := os.OpenFile(b.logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644); err != nil {
 			log.Printf("[sunshine] failed to open log file %s: %v", b.logPath, err)
 		} else {
-			cmd.Stdout = f
-			cmd.Stderr = f
+			logFile = f
 		}
 	}
-	if err := cmd.Start(); err != nil {
-		return err
+
+	var proc sunshineProcess
+	if useSunshineSessionBroker() {
+		sp, err := sunshineSessionBrokerLaunch(launchExe, launchArgs, launchDir, logFile, logFile)
+		if err != nil {
+			if errors.Is(err, errSunshineNoActiveSessionMarker) {
+				// Nobody has reached the logon screen's active session yet
+				// (fresh boot, fast-user-switch mid-transition, ...). Not a
+				// failure -- Start() gets called again on the next
+				// sunshineWatchdog tick, so this quietly waits rather than
+				// logging a "failure" every 15s until someone logs in.
+				log.Printf("[sunshine] no active console session yet, deferring start")
+				return nil
+			}
+			return err
+		}
+		log.Printf("[sunshine] started (session-broker) pid=%d launch=%s", sp.Pid(), launchExe)
+		proc = sp
+	} else {
+		cmd := exec.Command(launchExe, launchArgs...)
+		configureProcess(cmd)
+		if launchDir != "" && launchDir != "." {
+			cmd.Dir = launchDir
+		}
+		if logFile != nil {
+			cmd.Stdout = logFile
+			cmd.Stderr = logFile
+		}
+		if err := cmd.Start(); err != nil {
+			return err
+		}
+		log.Printf("[sunshine] started pid=%d launch=%s", cmd.Process.Pid, launchExe)
+		afterStart(b, cmd)
+		proc = sunshineExecCmdProcess{cmd}
 	}
-	b.cmd = cmd
-	log.Printf("[sunshine] started pid=%d launch=%s", cmd.Process.Pid, b.launchPath)
-	afterStart(b, cmd)
-	go b.watchProcessExit(cmd)
+
+	b.proc = proc
+	go b.watchProcessExit(proc)
 
 	return nil
 }
 
-// watchProcessExit blocks until cmd exits (however it exits — clean shutdown,
-// killed by Stop(), or a crash such as the ENet null-pointer-dereference bug
-// in Sunshine's host_create) and then clears b.cmd, so Start()'s "already
-// running, no-op" fast path stops believing a dead process is still alive.
-// Without this, a crashed Sunshine can only be recovered by restarting the
-// whole agent, since nothing else ever notices the child died.
+// watchProcessExit blocks until proc exits (however it exits — clean
+// shutdown, killed by Stop(), or a crash such as the ENet null-pointer-
+// dereference bug in Sunshine's host_create) and then clears b.proc, so
+// Start()'s "already running, no-op" fast path stops believing a dead
+// process is still alive. Without this, a crashed Sunshine can only be
+// recovered by restarting the whole agent, since nothing else ever notices
+// the child died.
 //
-// Only clears b.cmd if it's still THIS cmd: a concurrent Stop() or a newer
-// Start() may have already replaced it with a different process, and this
-// stale watcher must not clobber that.
-func (b *sunshineBackend) watchProcessExit(cmd *exec.Cmd) {
-	err := cmd.Wait()
+// Only clears b.proc if it's still THIS proc: a concurrent Stop() or a
+// newer Start() may have already replaced it with a different process, and
+// this stale watcher must not clobber that.
+func (b *sunshineBackend) watchProcessExit(proc sunshineProcess) {
+	err := proc.Wait()
 	log.Printf("[sunshine] process exited: %v", err)
 	b.mu.Lock()
-	wasOurs := b.cmd == cmd
+	wasOurs := b.proc == proc
 	if wasOurs {
-		b.cmd = nil
+		b.proc = nil
 	}
 	onExit := b.onExit
 	b.mu.Unlock()
@@ -613,10 +698,10 @@ func (b *sunshineBackend) Stop() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	var err error
-	if b.cmd != nil && b.cmd.Process != nil {
-		log.Printf("[sunshine] stopping pid=%d", b.cmd.Process.Pid)
-		err = b.cmd.Process.Kill()
-		b.cmd = nil
+	if b.proc != nil {
+		log.Printf("[sunshine] stopping pid=%d", b.proc.Pid())
+		err = b.proc.Kill()
+		b.proc = nil
 	}
 	if b.watchdog != nil && b.watchdog.Process != nil {
 		// Stop the watchdog too: we're already terminating Sunshine

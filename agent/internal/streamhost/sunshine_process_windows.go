@@ -3,14 +3,59 @@
 package streamhost
 
 import (
+	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"sync"
 	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/svc"
+
+	"usbridge_agent/internal/sessionlaunch"
 )
+
+// init wires Start()'s session-broker hooks the same way
+// rustshine_process_windows.go's own init does for gamestream-server: when
+// this process is itself running as the LocalSystem USBridgeAgent service,
+// launch Sunshine into the active console session instead of directly
+// under Session 0 -- see useSunshineSessionBroker's doc comment
+// (sunshine_backend.go) for why Sunshine specifically needs this.
+// svc.IsWindowsService() reflects how this process was actually started
+// and never changes for the life of the process, so it's safe to cache
+// once instead of re-checking on every Start() call.
+func init() {
+	isSvc, err := svc.IsWindowsService()
+	if err != nil {
+		log.Printf("[sunshine] could not determine if running as a Windows service (assuming not): %v", err)
+		isSvc = false
+	}
+	useSunshineSessionBroker = func() bool { return isSvc }
+	sunshineSessionBrokerLaunch = sunshineSessionBrokerLaunchImpl
+}
+
+// sunshineSessionBrokerLaunchImpl launches exe inside the active console
+// session via internal/sessionlaunch, then assigns it to the same
+// kill-on-job-close Job Object a plain exec.Cmd launch would get via
+// afterStart -- CreateProcessAsUser (unlike exec.Cmd) never gives Go's
+// os/exec any notion of "child" to hook Pdeathsig-equivalent cleanup into,
+// so it has to be done explicitly by PID here instead. No __COMPAT_LAYER
+// override is needed the way rustshine's gamestream-server (a fork of
+// upstream, no DPI manifest of its own) needs one -- Sunshine ships a
+// proper DPI-awareness manifest.
+func sunshineSessionBrokerLaunchImpl(exe string, args []string, workDir string, stdout, stderr *os.File) (sunshineProcess, error) {
+	h, err := sessionlaunch.LaunchInActiveSession(exe, args, workDir, stdout, stderr, nil)
+	if err != nil {
+		if err == sessionlaunch.ErrNoActiveSession {
+			return nil, fmt.Errorf("%w: %v", errSunshineNoActiveSessionMarker, err)
+		}
+		return nil, err
+	}
+	assignToKillOnCloseJob(h.Pid())
+	return sessionProcAdapter{h}, nil
+}
 
 // configureProcess hides the console window Windows would otherwise pop up
 // for Sunshine (a console-subsystem exe) when spawned from the agent, which

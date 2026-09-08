@@ -250,7 +250,11 @@ func (mw *MainWindow) showAccountDialog() {
 		if scroll != nil {
 			if am.LoggedIn() {
 				scroll.Content = view.NewInset(body, 21, 21, 14, 18)
-				scroll.SetMinSize(fyne.NewSize(0, 200))
+				if !am.HasSyncKey() {
+					scroll.SetMinSize(fyne.NewSize(0, 250))
+				} else {
+					scroll.SetMinSize(fyne.NewSize(0, 200))
+				}
 			} else if am.LoginInProgress() {
 				scroll.Content = view.NewInset(body, 21, 21, 2, 6)
 				scroll.SetMinSize(fyne.NewSize(0, 110))
@@ -289,7 +293,11 @@ func (mw *MainWindow) showAccountDialog() {
 
 	if am.LoggedIn() {
 		scroll = container.NewVScroll(view.NewInset(body, 21, 21, 14, 18))
-		scroll.SetMinSize(fyne.NewSize(0, 200))
+		if !am.HasSyncKey() {
+			scroll.SetMinSize(fyne.NewSize(0, 250))
+		} else {
+			scroll.SetMinSize(fyne.NewSize(0, 200))
+		}
 	} else if am.LoginInProgress() {
 		scroll = container.NewVScroll(view.NewInset(body, 21, 21, 2, 6))
 		scroll.SetMinSize(fyne.NewSize(0, 110))
@@ -753,12 +761,12 @@ func accountSyncPassphraseSection(cm *controller.ConnectionManager, am *controll
 	entry.TextStyle.Monospace = true
 	styledEntry := wrapAccountField(entry, 10, color.NRGBA{R: 0xe9, G: 0xfd, B: 0xbb, A: 0xff})
 
-	saveBtn := widget.NewButton("Set passphrase", func() {
+	saveBtn := newAccountDialogDarkButton("Set passphrase", nil, nil, func() {
 		if entry.Text == "" {
 			return
 		}
 		am.SetSyncPassphrase(entry.Text)
 		render()
 	})
-	return container.NewVBox(titleRow, styledLabel, styledEntry, container.NewCenter(saveBtn)), nil
+	return container.New(&tightVBoxLayout{}, titleRow, styledLabel, styledEntry), container.NewHBox(saveBtn)
 }

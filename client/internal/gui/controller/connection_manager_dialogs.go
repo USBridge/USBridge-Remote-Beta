@@ -924,11 +924,34 @@ func (l *tightHeaderVBoxLayout) Layout(objects []fyne.CanvasObject, size fyne.Si
 	}
 }
 
+// connectionDialogCancelIconRes is the muted-gray X glyph every close/cancel
+// icon button restyled after the Add Connection dialog uses -- its own
+// header X, its inline paste view's Cancel, and the QR scanner popup's close
+// button -- one shared resource instead of a separately-inlined identical
+// SVG literal at each call site.
+var connectionDialogCancelIconRes = fyne.NewStaticResource("dialog_cancel.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#8f9381"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>`))
+
+// newConnectionDialogTopAccentBar is the thin teal-to-lime fade hairline
+// every dialog panel restyled after the Add Connection dialog carries along
+// its very top edge -- faded to transparent at both ends (3 segments, not 1
+// flat gradient) so it doesn't butt into the panel's rounded top corners.
+func newConnectionDialogTopAccentBar() fyne.CanvasObject {
+	teal := design.ColorConnectionBadgeText
+	lime := design.ColorConnectionAddFill
+	tealTransparent := color.NRGBA{R: 0x41, G: 0xe0, B: 0xc3, A: 0}
+	limeTransparent := color.NRGBA{R: 0xc4, G: 0xe7, B: 0x7a, A: 0}
+	accentLeftFade := canvas.NewHorizontalGradient(tealTransparent, teal)
+	accentLeftFade.SetMinSize(fyne.NewSize(70, 2))
+	accentRightFade := canvas.NewHorizontalGradient(lime, limeTransparent)
+	accentRightFade.SetMinSize(fyne.NewSize(70, 2))
+	accentMid := canvas.NewHorizontalGradient(teal, lime)
+	return container.NewBorder(nil, nil, accentLeftFade, accentRightFade, accentMid)
+}
+
 func showAdaptiveConnectionDialog(parent fyne.Window, dialogTitle, subtitle string, headerIcon fyne.Resource, feedback fyne.CanvasObject, form fyne.CanvasObject, connectBtn, saveBtn, deleteBtn fyne.CanvasObject, footer ...fyne.CanvasObject) *widget.PopUp {
 	title := view.NewBrandText(dialogTitle, 13, design.ColorTextLight, true)
 
-	cancelRes := fyne.NewStaticResource("dialog_cancel.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#8f9381"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>`))
-	closeBtn := newConnectionDialogIconButton(cancelRes, nil)
+	closeBtn := newConnectionDialogIconButton(connectionDialogCancelIconRes, nil)
 
 	var titleCol fyne.CanvasObject = title
 	if strings.TrimSpace(subtitle) != "" {
@@ -969,25 +992,7 @@ func showAdaptiveConnectionDialog(parent fyne.Window, dialogTitle, subtitle stri
 		titleBar = titleCol
 	}
 
-	// A thin teal-to-lime gradient line along the panel's very top edge --
-	// same two accent colors (design.ColorConnectionBadgeText/
-	// ColorConnectionAddFill) the rest of this screen already uses for its
-	// "commit" actions (Save/Connect), just as a hairline instead of a fill.
-	// Faded to transparent at both ends (3 segments, not 1 flat gradient)
-	// rather than run edge-to-edge -- a hard-edged bar butting straight into
-	// the panel's rounded top corners read as crooked/misaligned there; a
-	// fade reads as intentional regardless of exactly where it meets the
-	// curve.
-	teal := design.ColorConnectionBadgeText
-	lime := design.ColorConnectionAddFill
-	tealTransparent := color.NRGBA{R: 0x41, G: 0xe0, B: 0xc3, A: 0}
-	limeTransparent := color.NRGBA{R: 0xc4, G: 0xe7, B: 0x7a, A: 0}
-	accentLeftFade := canvas.NewHorizontalGradient(tealTransparent, teal)
-	accentLeftFade.SetMinSize(fyne.NewSize(70, 2))
-	accentRightFade := canvas.NewHorizontalGradient(lime, limeTransparent)
-	accentRightFade.SetMinSize(fyne.NewSize(70, 2))
-	accentMid := canvas.NewHorizontalGradient(teal, lime)
-	topAccent := container.NewBorder(nil, nil, accentLeftFade, accentRightFade, accentMid)
+	topAccent := newConnectionDialogTopAccentBar()
 
 	// Cancel sits at the opposite end of the footer from Connect/Save --
 	// same close action as the header's X, just also reachable from where
@@ -2186,8 +2191,7 @@ func newConnectionDialogInlinePasteView(parent fyne.Window, onApply func(interna
 		errLabel.Refresh()
 	}
 
-	cancelRes := fyne.NewStaticResource("dialog_cancel.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#8f9381"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>`))
-	closeBtn := newCompactConnectionDialogIconButton(cancelRes, func() {
+	closeBtn := newCompactConnectionDialogIconButton(connectionDialogCancelIconRes, func() {
 		reset()
 		onCancel()
 	})

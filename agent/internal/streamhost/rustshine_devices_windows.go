@@ -34,6 +34,23 @@ func (b *rustshineBackend) ListCaptureDevices() []CaptureDevice {
 	if binPath == "" {
 		return nil
 	}
+	if b.isUpdatePaused() {
+		// See streamhost.UpdatePauser's doc comment: an in-flight update
+		// needs gamestream-server.exe to stay completely unopened for its
+		// stop-download-rename sequence to land -- confirmed live as a real
+		// failure mode, not just a theoretical one: even with the main
+		// process's own restart race already closed, a --list-capture-devices
+		// spawned by an ordinary /api/video/devices poll (a client's GUI
+		// keeps making these regardless of what the update flow is doing)
+		// could still win a race against the rename by momentarily
+		// re-locking the file the instant the main process released it.
+		// Nothing downstream distinguishes "no devices reported yet" from
+		// "genuinely none" here, so a caller polling during the (brief)
+		// update window just sees a transient empty/stale result, same as
+		// it would if this call happened to land a few hundred ms earlier.
+		log.Printf("[rustshine] --list-capture-devices skipped -- update in progress")
+		return nil
+	}
 
 	var out []byte
 	if useSessionBroker() {

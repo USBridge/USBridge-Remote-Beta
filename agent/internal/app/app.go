@@ -1856,10 +1856,12 @@ func (a *App) checkRustShineUpdate(ctx context.Context, entitlementToken string)
 	}
 	a.entStatus.RustShineUpdateInProgress = true
 	a.entMu.Unlock()
+	a.setRustShineUpdatePaused(true)
 	defer func() {
 		a.entMu.Lock()
 		a.entStatus.RustShineUpdateInProgress = false
 		a.entMu.Unlock()
+		a.setRustShineUpdatePaused(false)
 	}()
 
 	log.Printf("[app] rustshine update available (%s) — downloading", version)
@@ -1883,6 +1885,19 @@ func (a *App) checkRustShineUpdate(ctx context.Context, entitlementToken string)
 	a.entStatus.RustShineStaged = a.rustshineStaged()
 	a.entMu.Unlock()
 	a.restartRustShineIfActive()
+}
+
+// setRustShineUpdatePaused tells the active backend (if it implements
+// streamhost.UpdatePauser -- currently just rustshine) to hold off opening
+// any new handle on its own executable for as long as an update is in
+// flight. See that interface's doc comment for the exact
+// --list-capture-devices race this closes; a no-op for any backend that
+// doesn't implement it (Sunshine has no equivalent hot-replace-while-running
+// concern).
+func (a *App) setRustShineUpdatePaused(paused bool) {
+	if up, ok := a.stream.(streamhost.UpdatePauser); ok {
+		up.SetUpdateInProgress(paused)
+	}
 }
 
 // stopRustShineForUpdate stops the active RustShine process before an

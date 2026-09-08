@@ -36,6 +36,24 @@ type ProcessWatcher interface {
 	SetOnExit(fn func())
 }
 
+// UpdatePauser is implemented by backends whose own executable can be
+// hot-replaced on disk while the agent keeps running (currently just
+// rustshine on Windows -- see rustshineBackend's own doc comment). Windows
+// locks a running .exe's image section against rename/replace, so the
+// update flow stops the main process first specifically to release that
+// lock -- but that's not the only thing that can open a fresh handle on the
+// same binary: a --list-capture-devices helper subprocess (spawned by
+// ListCaptureDevices, itself triggered by an ordinary /api/video/devices
+// poll a client's GUI keeps making regardless of what the update flow is
+// doing) can win a race against the rename by momentarily re-locking the
+// file the instant the main process lets go of it. SetUpdateInProgress(true)
+// tells the backend to skip spawning any such helper for as long as an
+// update's stop-download-rename sequence is in flight; ordinary polling
+// callers just see ListCaptureDevices return nothing new until it clears.
+type UpdatePauser interface {
+	SetUpdateInProgress(inProgress bool)
+}
+
 // Lifecycle starts, stops, and health-checks the game-streaming host process.
 type Lifecycle interface {
 	Start(adminPort int) error

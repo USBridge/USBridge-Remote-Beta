@@ -437,6 +437,7 @@ func (mw *MainWindow) createConnectionAddressBar() *fyne.Container {
 	// other's types (see ConnectionHeaderHandle).
 	if mw.connectionManager != nil {
 		mw.connectionManager.SetTailscaleStatusSink(handle.SetTailscaleState)
+		mw.connectionManager.SetAccountStateSink(handle.SetAccountState)
 	}
 
 	return band

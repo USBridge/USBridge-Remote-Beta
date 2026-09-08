@@ -3,14 +3,18 @@ package gui
 import (
 	"context"
 	"fmt"
+	"image/color"
 	"time"
 
 	"usbridge-client/internal/account"
 	"usbridge-client/internal/gui/controller"
+	"usbridge-client/internal/gui/design"
+	"usbridge-client/internal/gui/view"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/widget"
 )
 
@@ -130,18 +134,77 @@ func (mw *MainWindow) showAccountDialog() {
 	}
 	render()
 
-	dlg := dialog.NewCustom("Account", "Close", body, mw.window)
-	dlg.Resize(fyne.NewSize(420, 0))
-
-	stop := make(chan struct{})
-	stopped := false
-	dlg.SetOnClosed(func() {
-		if !stopped {
-			stopped = true
-			close(stop)
+	// Chrome restyled after the Add Connection dialog's own panel: title +
+	// X header with the teal-to-lime top accent hairline, dark
+	// design.ColorGray900 background, thin design.ColorBorder outline --
+	// instead of this dialog's old plain dialog.NewCustom frame.
+	var popup *widget.PopUp
+	closeDialog := func() {
+		if popup != nil {
+			popup.Hide()
 		}
+	}
+
+	title := view.NewBrandText("Account", 13, design.ColorTextLight, true)
+	closeBtn := newAccountDialogCloseButton(closeDialog)
+	topAccent := newAccountDialogTopAccentBar()
+
+	sep := canvas.NewRectangle(color.NRGBA{R: 0x30, G: 0x34, B: 0x2e, A: 0xff})
+	sep.SetMinSize(fyne.NewSize(0, 1))
+
+	// right=44 on the title's own inset (not closeBtn sharing this row)
+	// reserves clearance so the title never runs under closeBtn, which sits
+	// on its own layer closer to the panel's actual corner (see cornerBtn
+	// below) -- same reasoning as the Add Connection dialog's own header.
+	header := container.NewVBox(topAccent, view.NewInset(title, 21, 44, 9, 4), sep)
+
+	scroll := container.NewVScroll(view.NewInset(body, 21, 21, 14, 18))
+	// Explicit min size -- ScrollVerticalOnly's own MinSize otherwise stays
+	// frozen at whatever was last set (0 here, never set), which would
+	// collapse the dialog to the header's height alone on first layout.
+	scroll.SetMinSize(fyne.NewSize(0, 220))
+
+	bg := canvas.NewRectangle(design.ColorGray900)
+	bg.CornerRadius = design.RadiusMD
+	border := canvas.NewRectangle(color.Transparent)
+	border.CornerRadius = design.RadiusMD
+	border.StrokeColor = design.ColorBorder
+	border.StrokeWidth = 1
+
+	// closeBtn sits on its own layer, pinned close to the panel's actual
+	// top-right corner rather than sharing header's own content margin --
+	// same accountDialogCornerButtonLayout treatment (mirroring
+	// controller.dialogCornerButtonLayout) the Add Connection dialog and QR
+	// scanner popup's own header X use.
+	cornerBtn := container.New(&accountDialogCornerButtonLayout{Top: 12, Right: 12}, closeBtn)
+
+	panel := container.NewStack(
+		bg,
+		container.NewBorder(header, nil, nil, nil, scroll),
+		cornerBtn,
+		border,
+	)
+
+	popup = view.ShowOverlayPopup(mw.window, view.OverlayPopupSpec{
+		Panel:    panel,
+		DimColor: color.NRGBA{R: 0x00, G: 0x00, B: 0x00, A: 0x72},
+		PanelSize: func(canvasSize fyne.Size, panel fyne.CanvasObject) fyne.Size {
+			margin := clampFloat32(minFloat32(canvasSize.Width, canvasSize.Height)*0.04, 20, 32)
+			maxWidth := canvasSize.Width - margin*2
+			maxHeight := canvasSize.Height - margin*2
+			if maxWidth <= 0 {
+				maxWidth = canvasSize.Width
+			}
+			if maxHeight <= 0 {
+				maxHeight = canvasSize.Height
+			}
+
+			panelMin := panel.MinSize()
+			panelWidth := minFloat32(maxFloat32(panelMin.Width, 420), maxWidth)
+			panelHeight := minFloat32(panelMin.Height, maxHeight)
+			return fyne.NewSize(panelWidth, panelHeight)
+		},
 	})
-	dlg.Show()
 
 	// Polls while the dialog is open (same 2s cadence the agent's own
 	// license dialog uses) so a login completing in the browser is
@@ -150,15 +213,16 @@ func (mw *MainWindow) showAccountDialog() {
 	// whatever Entry the human might be mid-typing into) when the
 	// snapshot genuinely changed since the last tick. See
 	// accountDialogSnapshot's own doc comment for why this matters.
+	// Stops itself once popup is no longer visible (X button, tap-outside,
+	// or however else it closed) rather than needing an explicit
+	// close-hook -- widget.PopUp has no SetOnClosed equivalent.
 	go func() {
 		last := newAccountDialogSnapshot(am)
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
-		for {
-			select {
-			case <-stop:
+		for range ticker.C {
+			if popup == nil || !popup.Visible() {
 				return
-			case <-ticker.C:
 			}
 			next := newAccountDialogSnapshot(am)
 			if next == last {
@@ -168,6 +232,148 @@ func (mw *MainWindow) showAccountDialog() {
 			fyne.Do(render)
 		}
 	}()
+}
+
+// accountDialogCloseIcon is the same muted-olive X glyph the Add Connection
+// dialog's own header close button uses (controller package's
+// connectionDialogCancelIconRes) -- duplicated here (one line of SVG)
+// rather than exported across the package boundary just for this.
+var accountDialogCloseIcon = fyne.NewStaticResource("account_dialog_cancel.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#8f9381"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>`))
+
+// accountDialogCloseButton is a minimal transparent-until-hovered icon
+// button -- a trimmed-down copy of the Add Connection dialog's own close
+// button (controller.connectionDialogIconButton) for this one use: no
+// disabled state, no custom colors, just the same look.
+type accountDialogCloseButton struct {
+	widget.BaseWidget
+
+	onTapped func()
+	hovered  bool
+
+	bg   *canvas.Rectangle
+	bdr  *canvas.Rectangle
+	icon *canvas.Image
+}
+
+func newAccountDialogCloseButton(onTapped func()) *accountDialogCloseButton {
+	b := &accountDialogCloseButton{onTapped: onTapped}
+	b.ExtendBaseWidget(b)
+	return b
+}
+
+func (b *accountDialogCloseButton) MinSize() fyne.Size {
+	return fyne.NewSize(28, 28)
+}
+
+func (b *accountDialogCloseButton) CreateRenderer() fyne.WidgetRenderer {
+	b.bg = canvas.NewRectangle(color.Transparent)
+	b.bg.CornerRadius = 6
+
+	b.bdr = canvas.NewRectangle(color.Transparent)
+	b.bdr.CornerRadius = 6
+	b.bdr.StrokeWidth = 1
+
+	b.icon = canvas.NewImageFromResource(accountDialogCloseIcon)
+	b.icon.FillMode = canvas.ImageFillContain
+	b.icon.ScaleMode = canvas.ImageScaleSmooth
+	b.icon.SetMinSize(fyne.NewSize(18, 18))
+	b.icon.Translucency = 0.32
+
+	return widget.NewSimpleRenderer(container.NewStack(b.bg, b.bdr, container.NewCenter(b.icon)))
+}
+
+func (b *accountDialogCloseButton) Tapped(*fyne.PointEvent) {
+	if b.onTapped != nil {
+		b.onTapped()
+	}
+}
+
+func (b *accountDialogCloseButton) TappedSecondary(*fyne.PointEvent) {}
+
+func (b *accountDialogCloseButton) Cursor() desktop.Cursor {
+	return desktop.PointerCursor
+}
+
+func (b *accountDialogCloseButton) MouseIn(*desktop.MouseEvent) {
+	b.hovered = true
+	b.refreshVisuals()
+}
+
+func (b *accountDialogCloseButton) MouseMoved(*desktop.MouseEvent) {}
+
+func (b *accountDialogCloseButton) MouseOut() {
+	b.hovered = false
+	b.refreshVisuals()
+}
+
+func (b *accountDialogCloseButton) refreshVisuals() {
+	if b.bg == nil {
+		return
+	}
+	if b.hovered {
+		b.bg.FillColor = color.NRGBA{R: 0xff, G: 0xff, B: 0xff, A: 0x10}
+		b.bdr.StrokeColor = color.NRGBA{R: 0x8f, G: 0x93, B: 0x81, A: 0xff}
+		b.icon.Translucency = 0.08
+	} else {
+		b.bg.FillColor = color.Transparent
+		b.bdr.StrokeColor = color.Transparent
+		b.icon.Translucency = 0.32
+	}
+	b.bg.Refresh()
+	b.bdr.Refresh()
+	b.icon.Refresh()
+}
+
+// newAccountDialogTopAccentBar is the same thin teal-to-lime fade hairline
+// the Add Connection dialog and QR scanner popups carry along their top
+// edge -- duplicated here rather than exported across the package boundary
+// (see controller.newConnectionDialogTopAccentBar, the original).
+func newAccountDialogTopAccentBar() fyne.CanvasObject {
+	teal := design.ColorConnectionBadgeText
+	lime := design.ColorConnectionAddFill
+	tealTransparent := color.NRGBA{R: 0x41, G: 0xe0, B: 0xc3, A: 0}
+	limeTransparent := color.NRGBA{R: 0xc4, G: 0xe7, B: 0x7a, A: 0}
+	leftFade := canvas.NewHorizontalGradient(tealTransparent, teal)
+	leftFade.SetMinSize(fyne.NewSize(70, 2))
+	rightFade := canvas.NewHorizontalGradient(lime, limeTransparent)
+	rightFade.SetMinSize(fyne.NewSize(70, 2))
+	mid := canvas.NewHorizontalGradient(teal, lime)
+	return container.NewBorder(nil, nil, leftFade, rightFade, mid)
+}
+
+// accountDialogCornerButtonLayout pins its single child at a fixed offset
+// from the panel's top-right corner, at the child's own natural size --
+// mirrors controller.dialogCornerButtonLayout (used by the Add Connection
+// dialog and QR scanner popups for the same "X sits in the corner, decoupled
+// from the title's own margin" placement), duplicated here rather than
+// exported across the package boundary for one small layout type.
+type accountDialogCornerButtonLayout struct {
+	Top   float32
+	Right float32
+}
+
+func (l *accountDialogCornerButtonLayout) Layout(objects []fyne.CanvasObject, size fyne.Size) {
+	if len(objects) == 0 {
+		return
+	}
+	btn := objects[0]
+	btnSize := btn.MinSize()
+	btn.Resize(btnSize)
+	btn.Move(fyne.NewPos(size.Width-l.Right-btnSize.Width, l.Top))
+}
+
+func (l *accountDialogCornerButtonLayout) MinSize([]fyne.CanvasObject) fyne.Size {
+	return fyne.NewSize(0, 0)
+}
+
+func clampFloat32(v, lo, hi float32) float32 {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 // accountLicensesList fetches the logged-in account's licenses exactly

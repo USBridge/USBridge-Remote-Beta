@@ -95,6 +95,13 @@ type ConnectionManager struct {
 	// there's no import cycle back to package gui.
 	tsStatusSink func(status, authLabel string)
 
+	// accountStateSink pushes the account login state into the connection
+	// header's avatar button (see gui.ConnectionHeaderHandle.SetAccountState)
+	// -- same wiring shape as tsStatusSink above, fired both once up front
+	// (SetAccountStateSink) and again on every login/logout (see the
+	// AccountManager onChange callback in NewConnectionManager).
+	accountStateSink func(loggedIn bool, email string)
+
 	// Account owns the account login + sync passphrase this connections
 	// list is end-to-end synced under -- see account_manager.go and
 	// connection_manager_sync.go. nil is a valid state (no account
@@ -248,6 +255,10 @@ func NewConnectionManager(app fyne.App, window fyne.Window, config *models.AppCo
 		// fresh set of credentials becomes available worth reconciling
 		// against, e.g. right after SetSyncPassphrase on a second device.
 		go cm.trySyncPullAndMerge()
+		// Also keep the header avatar's teal/letter state in sync with
+		// every login/logout -- not just passphrase changes, which don't
+		// affect it, but cheap enough not to bother filtering.
+		cm.notifyAccountState()
 	})
 	go cm.trySyncPullAndMerge()
 	return cm
@@ -568,6 +579,35 @@ func (cm *ConnectionManager) OpenInfoPage() {
 // ConnectionHeaderHandle.SetTailscaleState).
 func (cm *ConnectionManager) SetTailscaleStatusSink(sink func(status, authLabel string)) {
 	cm.tsStatusSink = sink
+}
+
+// SetAccountStateSink registers where live account login state goes --
+// normally the connection header's avatar button, wired up once by
+// MainWindow right after it builds that header (see connection_header.go's
+// ConnectionHeaderHandle.SetAccountState). Pushes the current state right
+// away too, so an already-logged-in account (persisted from a previous
+// session) shows correctly from the first frame instead of waiting for the
+// next login/logout event.
+func (cm *ConnectionManager) SetAccountStateSink(sink func(loggedIn bool, email string)) {
+	cm.accountStateSink = sink
+	// Off the main goroutine: this runs during MainWindow construction,
+	// before the Fyne event loop is pumping, and notifyAccountState calls
+	// fyne.Do -- which errors if invoked directly from the main goroutine
+	// at that point (same reasoning as initTailscaleMode's own comment).
+	go cm.notifyAccountState()
+}
+
+// notifyAccountState pushes the account manager's current login state into
+// accountStateSink, if one is registered.
+func (cm *ConnectionManager) notifyAccountState() {
+	if cm.accountStateSink == nil || cm.Account == nil {
+		return
+	}
+	loggedIn := cm.Account.LoggedIn()
+	email := cm.Account.Email()
+	fyne.Do(func() {
+		cm.accountStateSink(loggedIn, email)
+	})
 }
 
 // ToggleTailscale runs the same sign-in/sign-out flow the connection

@@ -33,12 +33,14 @@ type connectionHeaderActions struct {
 	OnOpenAccount func()
 }
 
-// ConnectionHeaderHandle lets the controller push live Tailscale status into
-// an already-built connection header, without owning (or even seeing the
-// type of) any of its widgets. nil-safe: a nil accessory (wasm builds, see
-// newConnectionHeader) yields a handle whose SetTailscaleState is a no-op.
+// ConnectionHeaderHandle lets the controller push live Tailscale status and
+// account/login state into an already-built connection header, without
+// owning (or even seeing the type of) any of its widgets. nil-safe: a nil
+// accessory (wasm builds, see newConnectionHeader) yields a handle whose
+// SetTailscaleState is a no-op.
 type ConnectionHeaderHandle struct {
 	toggle *tailscaleHeaderToggle
+	avatar *loginAvatarButton
 }
 
 // SetTailscaleState updates the header's Tailscale toggle from the same raw
@@ -51,6 +53,17 @@ func (h *ConnectionHeaderHandle) SetTailscaleState(status, authLabel string) {
 	h.toggle.SetOn(active)
 	h.toggle.SetLoading(loading)
 	h.toggle.SetDisabled(loading) // Block button during transition
+}
+
+// SetAccountState updates the login avatar button from the account manager's
+// login state -- teal background with the account email's first letter while
+// logged in, the plain gray "U" placeholder otherwise (see
+// loginAvatarButton.SetState).
+func (h *ConnectionHeaderHandle) SetAccountState(loggedIn bool, email string) {
+	if h == nil || h.avatar == nil {
+		return
+	}
+	h.avatar.SetState(loggedIn, email)
 }
 
 // headerCompactButtonSize is how big the info/community/language buttons
@@ -111,7 +124,7 @@ func newConnectionHeader(actions connectionHeaderActions) (*fyne.Container, *Con
 	})
 
 	var tailscaleAccessory fyne.CanvasObject
-	handle := &ConnectionHeaderHandle{}
+	handle := &ConnectionHeaderHandle{avatar: loginBtn}
 	if runtime.GOOS == "js" {
 		// No embedded tsnet in a browser tab (tailscale_service_wasm.go is a
 		// stub) -- the "Sign In With Google" toggle has nothing to do here,
@@ -401,6 +414,11 @@ type loginAvatarButton struct {
 	letterText string
 	onTapped   func()
 	hovered    bool
+	// loggedIn switches refreshVisuals from the plain gray placeholder look
+	// to a teal-filled avatar -- set via SetState, driven by
+	// ConnectionHeaderHandle.SetAccountState (ultimately AccountManager's
+	// own login state).
+	loggedIn bool
 
 	circle *canvas.Circle
 	letter *canvas.Text
@@ -450,16 +468,48 @@ func (b *loginAvatarButton) MouseOut() {
 	b.refreshVisuals()
 }
 
-// refreshVisuals only ever changes the circle's own fill -- never adds a
-// separate hover shape -- so the hover state stays circular no matter what.
+// SetState reflects the account manager's login state onto the avatar:
+// teal background with the email's first letter (uppercased) while logged
+// in, or back to the plain gray placeholder letter ("U") when logged out.
+func (b *loginAvatarButton) SetState(loggedIn bool, email string) {
+	b.loggedIn = loggedIn
+	letter := "U"
+	if loggedIn {
+		if trimmed := strings.TrimSpace(email); trimmed != "" {
+			letter = strings.ToUpper(string([]rune(trimmed)[0]))
+		}
+	}
+	b.letterText = letter
+	if b.letter != nil {
+		b.letter.Text = letter
+		b.letter.Refresh()
+	}
+	b.refreshVisuals()
+}
+
+// refreshVisuals only ever changes the circle's own fill (plus the letter's
+// color, since a teal-filled circle needs a dark letter to stay readable) --
+// never adds a separate hover shape -- so the hover state stays circular no
+// matter what.
 func (b *loginAvatarButton) refreshVisuals() {
 	if b.circle == nil {
 		return
 	}
 	fill := design.ColorLoginAvatarBg
-	if b.hovered {
+	letterColor := design.ColorLoginAvatarText
+	if b.loggedIn {
+		fill = design.ColorConnectionBadgeText
+		letterColor = design.ColorGray950
+		if b.hovered {
+			fill = color.NRGBA{R: 0x61, G: 0xf0, B: 0xd3, A: 0xff} // same hover teal Save/Apply use
+		}
+	} else if b.hovered {
 		fill = design.ColorSurfaceLight
 	}
 	b.circle.FillColor = fill
 	b.circle.Refresh()
+	if b.letter != nil {
+		b.letter.Color = letterColor
+		b.letter.Refresh()
+	}
 }

@@ -263,9 +263,9 @@ func (c *Client) StartFreeTrial() error {
 	return c.do(http.MethodPost, "/token/start-trial", nil, nil)
 }
 
-func (c *Client) StartPurchase() (string, error) {
+func (c *Client) StartPurchase(tier string) (string, error) {
 	var body stringBody
-	if err := c.do(http.MethodPost, "/token/start-purchase", nil, &body); err != nil {
+	if err := c.do(http.MethodPost, "/token/start-purchase", stringBody{Value: tier}, &body); err != nil {
 		return "", err
 	}
 	return body.Value, nil

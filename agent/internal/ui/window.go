@@ -65,7 +65,7 @@ type TokenProvider interface {
 	// internal/hwid).
 	EntitlementStatus() entitlement.Status
 	StartFreeTrial() error
-	StartPurchase() (string, error)
+	StartPurchase(tier string) (string, error)
 	CancelPurchase()
 	ClearLicense() error
 	DownloadRustShine(onProgress entitlement.ProgressFunc) error
@@ -1170,12 +1170,36 @@ func (w *Window) refreshSupportButton(st entitlement.Status) {
 	}
 }
 
+// The four global licenses (see usbridge-entitlement-backend's
+// desktopLicense.ts tier doc comment) as shown in showLicenseDialog's
+// radio group -- exact row labels, used both to build the group and to
+// tell rows apart in its OnChanged switch.
+const (
+	licenseRowSunshine            = "Sunshine (Open Source) — free"
+	licenseRowRustShineFree       = "RustShine — Free"
+	licenseRowRustShinePro        = "RustShine — Pro · $8/mo (4:4:4 color)"
+	licenseRowRustShineEnterprise = "RustShine — Enterprise · $25/mo (session logs, team access)"
+)
+
+// tierDisplayName renders a bare tier string ("pro"/"enterprise") as the
+// capitalized name used in confirm dialogs and status headlines.
+func tierDisplayName(tier string) string {
+	switch tier {
+	case "pro":
+		return "RustShine Pro"
+	case "enterprise":
+		return "RustShine Enterprise"
+	default:
+		return tier
+	}
+}
+
 // showLicenseDialog is the single entry point for the whole hardware-bound
-// RustShine license flow: start a free trial or buy, wait, download,
-// switch, clear -- all as one dialog that re-renders itself as
-// entitlement.Status changes, rather than a sequence of separate popups.
-// Opened only by an explicit click on supportBtn — never shown
-// automatically.
+// RustShine license flow: pick one of the four global licenses, wait for a
+// subscription checkout to land, download, switch, clear -- all as one
+// dialog that re-renders itself as entitlement.Status changes, rather than
+// a sequence of separate popups. Opened only by an explicit click on
+// supportBtn — never shown automatically.
 func (w *Window) showLicenseDialog(parent fyne.Window) {
 	if parent == nil || w.token == nil {
 		return
@@ -1205,14 +1229,30 @@ func (w *Window) showLicenseDialog(parent fyne.Window) {
 
 	body := container.NewVBox()
 
-	// checkoutURLFallback: see its use in the "Buy a license" click handler
+	// checkoutURLFallback: see its use in requestTier's click handler
 	// below. Declared out here (not local to render) so it survives from
 	// the goroutine's fyne.Do callback into the next render() call.
 	var checkoutURLFallback string
 
+	// pendingTierSwitch: set by requestTier right before opening a Pro/
+	// Enterprise checkout, cleared once that tier actually lands AND
+	// RustShine finishes staging -- at which point render auto-switches
+	// the active backend to RustShine with no separate button click
+	// needed. See render's own use of it below.
+	var pendingTierSwitch string
+
 	var render func(st entitlement.Status)
 	render = func(st entitlement.Status) {
 		body.RemoveAll()
+
+		if pendingTierSwitch != "" && st.Tier == pendingTierSwitch && st.RustShineStaged && st.ActiveBackend != "rustshine" {
+			pendingTierSwitch = ""
+			go func() {
+				_ = w.token.SetStreamBackend("rustshine")
+				fyne.Do(func() { render(w.token.EntitlementStatus()) })
+			}()
+			return // this render call is stale -- the goroutine's own re-render shows the final state
+		}
 
 		switch {
 		case st.LinkInProgress:
@@ -1243,124 +1283,55 @@ func (w *Window) showLicenseDialog(parent fyne.Window) {
 			}
 			body.Add(pb)
 
-		case st.Linked && st.RustShineStaged:
+		case !st.Linked:
+			// Only reached in the brief window before the very first
+			// background bootstrapFreeTier lands (see app.go's
+			// recheckEntitlement), or if this machine's hardware id can't
+			// be determined at all -- there is no more manual "start
+			// trial"/"buy" step to wait on before showing something real.
+			body.Add(widget.NewLabel("Setting up…"))
+			body.Add(widget.NewProgressBarInfinite())
+			if st.LastError != "" {
+				errText := canvas.NewText(st.LastError, design.ColorTextMuted)
+				errText.TextStyle.Italic = true
+				body.Add(errText)
+			}
+
+		case pendingTierSwitch != "" && st.Tier == pendingTierSwitch && !st.RustShineStaged:
+			// Payment landed (Tier already flipped) but RustShine hasn't
+			// finished downloading yet -- app.go's applyIssuedToken already
+			// kicked that off in the background the moment the tier
+			// landed; the check at the top of render switches to it
+			// automatically the instant RustShineStaged flips true, no
+			// button needed.
+			body.Add(widget.NewRichTextFromMarkdown(fmt.Sprintf("**%s active** 🎉\n\nDownloading RustShine…", tierDisplayName(pendingTierSwitch))))
+			body.Add(widget.NewProgressBarInfinite())
+
+		default:
 			var headline string
 			switch st.Tier {
-			case "trial":
-				headline = "**Free trial active** 🎉"
-				if !st.ExpiresAt.IsZero() {
-					headline += fmt.Sprintf(" — ends %s", st.ExpiresAt.Format("Jan 2"))
-				}
+			case "pro":
+				headline = "**RustShine Pro active** — 4:4:4 color unlocked 🎉"
+			case "enterprise":
+				headline = "**RustShine Enterprise active** 🎉"
 			default:
-				headline = "**Thanks for buying a USBridge license!** 🎉"
+				headline = "Pick a license below."
 			}
 			body.Add(widget.NewRichTextFromMarkdown(headline))
 
-			rustshineOn := st.ActiveBackend == "rustshine"
-			backendSwitch := newToggleSwitch(rustshineOn, func(on bool) {
-				kind := "sunshine"
-				if on {
-					kind = "rustshine"
-				}
-				go func() {
-					_ = w.token.SetStreamBackend(kind)
-					fyne.Do(func() { render(w.token.EntitlementStatus()) })
-				}()
-			})
-			sunshineLbl := widget.NewLabel("Sunshine")
-			rustshineLbl := widget.NewLabel("RustShine")
-			if rustshineOn {
-				rustshineLbl.TextStyle.Bold = true
-			} else {
-				sunshineLbl.TextStyle.Bold = true
-			}
-			body.Add(container.NewCenter(container.NewHBox(sunshineLbl, backendSwitch, rustshineLbl)))
-			// The "Web client (WebRTC)" toggle for RustShine lives in the
-			// main window's Permissions column now (w.rustshineWebRTCRow),
-			// not here -- it's useful to reach without opening this dialog.
-
-			clearBtn := widget.NewButton("Clear License", func() {
-				dialog.NewConfirm(
-					"Clear license?",
-					"This switches back to Sunshine and forgets this machine's license/trial locally. If you bought a license, buying again isn't needed — click \"Buy a license\" afterward and it'll be picked back up automatically for this hardware.",
-					func(confirmed bool) {
-						if !confirmed {
-							return
-						}
-						go func() {
-							_ = w.token.ClearLicense()
-							fyne.Do(func() { render(w.token.EntitlementStatus()) })
-						}()
-					},
-					parent,
-				).Show()
-			})
-			clearBtn.Importance = widget.LowImportance
-			body.Add(container.NewCenter(clearBtn))
-
-		case st.Linked && !st.RustShineStaged:
-			body.Add(widget.NewRichTextFromMarkdown("**You're all set!** 🎉\n\nReady to download RustShine?"))
 			if st.LastError != "" {
 				errText := canvas.NewText(st.LastError, design.ColorTextMuted)
 				errText.TextStyle.Italic = true
 				body.Add(errText)
 			}
-			dlBtn := widget.NewButton("Download RustShine", func() {
-				go func() {
-					_ = w.token.DownloadRustShine(nil)
-					fyne.Do(func() { render(w.token.EntitlementStatus()) })
-				}()
-			})
-			dlBtn.Importance = widget.HighImportance
-			body.Add(container.NewCenter(dlBtn))
-
-		default:
-			// Split into short, visually separate blocks (what it is / what
-			// you get / pricing) rather than one long paragraph — a single
-			// wall of text stayed hard to scan even once it wrapped
-			// correctly. Wrapping is set on each piece for the same reason
-			// noted on tsInfo/tsPeers below: without it, a widget reports
-			// its unwrapped single-line width as its MinSize, which —
-			// since nothing else here constrains width except minWidth's
-			// 420px *minimum* — stretches the whole popup out to fit it on
-			// one line instead of wrapping within the intended width.
-			intro := widget.NewLabel(
-				"RustShine is our proprietary streaming engine, built from " +
-					"scratch for USBridge — hardware AV1/HEVC encode, lower " +
-					"latency, and tighter frame pacing.",
-			)
-			intro.Wrapping = fyne.TextWrapWord
-			body.Add(intro)
-
-			features := widget.NewRichTextFromMarkdown(
-				"- Streams the Linux login screen (SDDM) too — including on NVIDIA, X11 and Wayland\n" +
-					"- Hardware video encode on every platform",
-			)
-			features.Wrapping = fyne.TextWrapWord
-			body.Add(features)
-
-			body.Add(widget.NewSeparator())
-
-			pricing := widget.NewRichTextFromMarkdown(
-				"Free for Sunshine (open source, unlimited). RustShine is a one-time purchase, " +
-					"licensed to this machine — or try it free for 7 days first, no purchase required.",
-			)
-			pricing.Wrapping = fyne.TextWrapWord
-			body.Add(pricing)
-
-			if st.LastError != "" {
-				errText := canvas.NewText(st.LastError, design.ColorTextMuted)
-				errText.TextStyle.Italic = true
-				body.Add(errText)
-			}
-			// checkoutURLFallback carries a URL that the click handler below
-			// obtained fine but couldn't hand to the OS browser itself (e.g.
-			// no default browser registered, a sandboxed/headless
-			// environment without xdg-open) -- previously that failure was
-			// silently swallowed ("_ = w.app.OpenURL(...)"), so the button
-			// visibly did nothing at all once the checkout link had already
-			// been fetched. Shown as a copyable link so the purchase can
-			// still be completed manually.
+			// checkoutURLFallback carries a URL that requestTier's click
+			// handler obtained fine but couldn't hand to the OS browser
+			// itself (e.g. no default browser registered, a sandboxed/
+			// headless environment without xdg-open) -- previously that
+			// failure was silently swallowed, so the click visibly did
+			// nothing at all once the checkout link had already been
+			// fetched. Shown as a copyable link so the purchase can still
+			// be completed manually.
 			if checkoutURLFallback != "" {
 				linkURI, _ := url.Parse(checkoutURLFallback)
 				fallback := widget.NewLabel("Couldn't open your browser automatically. Checkout link:")
@@ -1376,45 +1347,155 @@ func (w *Window) showLicenseDialog(parent fyne.Window) {
 				}
 			}
 
-			var buyBtn *widget.Button
-			buyBtn = widget.NewButton("Buy a license", func() {
-				checkoutURLFallback = ""
-				buyBtn.Disable()
-				buyBtn.SetText("Opening checkout…")
-				go func() {
-					checkoutURL, err := w.token.StartPurchase()
-					if err != nil {
-						// StartPurchase already recorded st.LastError -- the
-						// re-render below picks it up and shows it.
-						fyne.Do(func() { render(w.token.EntitlementStatus()) })
-						return
-					}
-					parsed, parseErr := url.Parse(checkoutURL)
-					openErr := parseErr
-					if parseErr == nil {
-						openErr = w.app.OpenURL(parsed)
-					}
-					fyne.Do(func() {
-						if openErr != nil {
-							checkoutURLFallback = checkoutURL
-						}
-						render(w.token.EntitlementStatus())
-					})
-				}()
-			})
-			buyBtn.Importance = widget.HighImportance
+			// The single switch for all four global licenses (see
+			// usbridge-entitlement-backend's desktopLicense.ts tier doc
+			// comment): which row is selected reflects what's ACTUALLY
+			// active right now (backend + tier), not just a purchase
+			// intent -- picking Sunshine or free RustShine always takes
+			// effect immediately (nothing to buy, nothing to confirm);
+			// picking Pro/Enterprise while not already entitled to it
+			// opens a subscription checkout instead of switching anything
+			// yet (see requestTier).
+			options := []string{
+				licenseRowSunshine,
+				licenseRowRustShineFree,
+				licenseRowRustShinePro,
+				licenseRowRustShineEnterprise,
+			}
+			current := licenseRowSunshine
+			if st.ActiveBackend == "rustshine" {
+				switch st.Tier {
+				case "pro":
+					current = licenseRowRustShinePro
+				case "enterprise":
+					current = licenseRowRustShineEnterprise
+				default:
+					current = licenseRowRustShineFree
+				}
+			}
 
-			buttons := container.NewHBox(buyBtn)
-			if st.TrialAvailable {
-				trialBtn := widget.NewButton("Start free 7-day trial", func() {
+			// switchToRustShine ensures RustShine is staged (downloading
+			// it first if this is the very first time, reusing the
+			// existing st.DownloadInProgress spinner case above -- no
+			// separate button needed) and then makes it the active
+			// backend. Used both for the plain Free row and for a
+			// Pro/Enterprise row that's already paid for.
+			switchToRustShine := func() {
+				go func() {
+					if !st.RustShineStaged {
+						if err := w.token.DownloadRustShine(nil); err != nil {
+							fyne.Do(func() { render(w.token.EntitlementStatus()) })
+							return
+						}
+					}
+					_ = w.token.SetStreamBackend("rustshine")
+					fyne.Do(func() { render(w.token.EntitlementStatus()) })
+				}()
+			}
+
+			// requestTier handles a Pro/Enterprise row click: switches
+			// straight to RustShine if this hardware id already carries
+			// that tier (or better) -- no need to pay twice -- otherwise
+			// confirms, then opens a subscription checkout for it.
+			// pollForLicense (app.go) picks up the completed purchase in
+			// the background same as before; render's own top-of-function
+			// check auto-switches the backend once it lands and RustShine
+			// finishes staging.
+			requestTier := func(tier string) {
+				if st.Tier == tier || (tier == "pro" && st.Tier == "enterprise") {
+					switchToRustShine()
+					return
+				}
+				dialog.NewConfirm(
+					fmt.Sprintf("Subscribe to %s?", tierDisplayName(tier)),
+					fmt.Sprintf(
+						"Opens Stripe checkout in your browser for the %s subscription. "+
+							"Once payment completes, RustShine downloads and switches on automatically.",
+						tierDisplayName(tier),
+					),
+					func(confirmed bool) {
+						if !confirmed {
+							render(w.token.EntitlementStatus()) // reset the radio's visual selection back to what's actually active
+							return
+						}
+						checkoutURLFallback = ""
+						pendingTierSwitch = tier
+						go func() {
+							checkoutURL, err := w.token.StartPurchase(tier)
+							if err != nil {
+								// StartPurchase already recorded st.LastError -- the
+								// re-render below picks it up and shows it.
+								fyne.Do(func() { render(w.token.EntitlementStatus()) })
+								return
+							}
+							parsed, parseErr := url.Parse(checkoutURL)
+							openErr := parseErr
+							if parseErr == nil {
+								openErr = w.app.OpenURL(parsed)
+							}
+							fyne.Do(func() {
+								if openErr != nil {
+									checkoutURLFallback = checkoutURL
+								}
+								render(w.token.EntitlementStatus())
+							})
+						}()
+					},
+					parent,
+				).Show()
+			}
+
+			radio := widget.NewRadioGroup(options, nil)
+			radio.Horizontal = false
+			radio.SetSelected(current)
+			radio.OnChanged = func(selected string) {
+				if selected == current {
+					return
+				}
+				switch selected {
+				case licenseRowSunshine:
 					go func() {
-						_ = w.token.StartFreeTrial()
+						_ = w.token.SetStreamBackend("sunshine")
 						fyne.Do(func() { render(w.token.EntitlementStatus()) })
 					}()
-				})
-				buttons = container.NewHBox(trialBtn, buyBtn)
+				case licenseRowRustShineFree:
+					switchToRustShine()
+				case licenseRowRustShinePro:
+					requestTier("pro")
+				case licenseRowRustShineEnterprise:
+					requestTier("enterprise")
+				}
 			}
-			body.Add(container.NewCenter(buttons))
+			body.Add(radio)
+			// The "Web client (WebRTC)" toggle for RustShine lives in the
+			// main window's Permissions column now (w.rustshineWebRTCRow),
+			// not here -- it's useful to reach without opening this dialog.
+
+			if st.Tier == "pro" || st.Tier == "enterprise" {
+				note := widget.NewLabel("Picking a lower tier above only switches the active encoder locally -- it doesn't cancel your subscription. Contact support to cancel or change plans.")
+				note.Wrapping = fyne.TextWrapWord
+				note.TextStyle.Italic = true
+				body.Add(note)
+			}
+
+			clearBtn := widget.NewButton("Forget this machine's license locally", func() {
+				dialog.NewConfirm(
+					"Forget license?",
+					"Switches back to Sunshine and forgets the cached license token on this machine only -- it does NOT cancel a paid subscription. Re-opening this dialog immediately re-links to your account's real tier (free, or paid if still active).",
+					func(confirmed bool) {
+						if !confirmed {
+							return
+						}
+						go func() {
+							_ = w.token.ClearLicense()
+							fyne.Do(func() { render(w.token.EntitlementStatus()) })
+						}()
+					},
+					parent,
+				).Show()
+			})
+			clearBtn.Importance = widget.LowImportance
+			body.Add(container.NewCenter(clearBtn))
 		}
 
 		body.Refresh()

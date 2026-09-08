@@ -49,7 +49,7 @@ type TokenBackend interface {
 	// internal/hwid).
 	EntitlementStatus() entitlement.Status
 	StartFreeTrial() error
-	StartPurchase() (string, error)
+	StartPurchase(tier string) (string, error)
 	CancelPurchase()
 	ClearLicense() error
 	DownloadRustShine(onProgress entitlement.ProgressFunc) error
@@ -432,7 +432,12 @@ func (s *Server) handleStartTrial(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStartPurchase(w http.ResponseWriter, r *http.Request) {
-	url, err := s.token.StartPurchase()
+	var body stringBody // Value = tier ("pro"/"enterprise")
+	if err := readJSON(r, &body); err != nil {
+		writeError(w, err)
+		return
+	}
+	url, err := s.token.StartPurchase(body.Value)
 	if err != nil {
 		writeError(w, err)
 		return

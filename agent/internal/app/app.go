@@ -2004,10 +2004,20 @@ func (a *App) CheckRustShineUpdateNow() error {
 	a.entStatus.RustShineUpdateInProgress = true
 	a.entStatus.LastError = ""
 	a.entMu.Unlock()
+	// Same UpdatePauser guard checkRustShineUpdate's own background tick
+	// takes (see setRustShineUpdatePaused's doc comment) -- this manual
+	// button races the same --list-capture-devices helper the same way a
+	// silent watchdog tick does, so it needs the same protection. Set/reset
+	// here regardless of whether needsUpdate turns out true below: cheap
+	// no-op either way, and keeps a single place responsible for the
+	// pause/unpause pairing instead of threading a conditional through the
+	// early-return path too.
+	a.setRustShineUpdatePaused(true)
 	defer func() {
 		a.entMu.Lock()
 		a.entStatus.RustShineUpdateInProgress = false
 		a.entMu.Unlock()
+		a.setRustShineUpdatePaused(false)
 	}()
 
 	ctx := context.Background()

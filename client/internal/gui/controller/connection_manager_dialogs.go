@@ -88,10 +88,18 @@ type connectionDialogSecondaryButton struct {
 	// Connect/Save use this to visually match the validation they already
 	// silently enforced (a tap with empty fields just did nothing before).
 	disabled bool
-	bg       *canvas.Rectangle
-	border   *canvas.Rectangle
-	label    *canvas.Text
-	icon     *canvas.Image
+	// disabledFillColor/disabledTextColor/disabledBorderColor let a button
+	// keep its own color identity while disabled (a darker shade of its own
+	// teal/lime) instead of switching to one generic gray -- nil falls back
+	// to that button's own normal fillColor/borderColor (unchanged) or the
+	// shared connectionDialogDisabledText, respectively.
+	disabledFillColor   color.Color
+	disabledTextColor   color.Color
+	disabledBorderColor color.Color
+	bg                  *canvas.Rectangle
+	border              *canvas.Rectangle
+	label               *canvas.Text
+	icon                *canvas.Image
 }
 
 // connectionDialogSecondaryButton's size constants -- normal vs. compact
@@ -313,6 +321,17 @@ func (b *connectionDialogSecondaryButton) SetLabel(text string) {
 	b.Refresh()
 }
 
+// SetIcon changes the button's icon in place -- Paste Link swaps to a
+// pencil while showing "Manual", since it no longer pastes a link.
+func (b *connectionDialogSecondaryButton) SetIcon(res fyne.Resource) {
+	b.iconRes = res
+	b.hoverIconRes = res
+	if b.icon != nil {
+		b.icon.Resource = res
+	}
+	b.Refresh()
+}
+
 // SetDisabled mutes this button's colors and makes Tapped a no-op --
 // Connect/Save use this so an empty-fields state (which their own
 // onConnect/onSave already silently rejected) also looks unclickable
@@ -339,17 +358,20 @@ func (b *connectionDialogSecondaryButton) MouseOut() {
 	b.refreshVisuals()
 }
 
-// connectionDialogDisabledFill/Text/IconTranslucency -- the one shared
-// "muted" look every button in this dialog switches to on SetDisabled(true),
-// regardless of its own normal/hover colors (Connect's lime, Save's teal,
-// Paste's dark pill all read as one consistent "not clickable yet" state
-// instead of each dimming its own color differently).
+// connectionDialogDisabledFill/Text -- the fallback "muted" look for a
+// button that doesn't set its own disabledFillColor/disabledTextColor.
+// Connect and Save both set their own (a darker shade of their own lime/
+// teal, not this neutral gray) -- see cBtn/sBtn in showConnectionEditorDialog
+// and connectionDialogTealDisabled below.
 var (
 	connectionDialogDisabledFill = color.NRGBA{R: 0x22, G: 0x26, B: 0x2a, A: 0x80}
 	connectionDialogDisabledText = color.NRGBA{R: 0x6b, G: 0x6e, B: 0x63, A: 0xff}
 )
 
-const connectionDialogDisabledIconTranslucency = 0.55
+// connectionDialogTealDisabled is the darker shade of design.
+// ColorConnectionBadgeText (#41e0c3) that Save/Apply's pill fades to while
+// disabled, instead of switching to a color outside their own teal family.
+var connectionDialogTealDisabled = color.NRGBA{R: 0x31, G: 0xa6, B: 0x94, A: 0xff}
 
 func (b *connectionDialogSecondaryButton) refreshVisuals() {
 	if b.bg == nil || b.border == nil || b.label == nil || b.icon == nil {
@@ -357,12 +379,27 @@ func (b *connectionDialogSecondaryButton) refreshVisuals() {
 	}
 
 	if b.disabled {
-		b.bg.FillColor = connectionDialogDisabledFill
-		b.border.StrokeColor = color.Transparent
+		fill := b.disabledFillColor
+		if fill == nil {
+			fill = b.fillColor
+		}
+		text := b.disabledTextColor
+		if text == nil {
+			text = connectionDialogDisabledText
+		}
+		border := b.disabledBorderColor
+		if border == nil {
+			border = b.borderColor
+		}
+		b.bg.FillColor = fill
+		b.border.StrokeColor = border
 		b.border.StrokeWidth = 0
-		b.label.Color = connectionDialogDisabledText
+		if border != nil && border != color.Transparent {
+			b.border.StrokeWidth = 1
+		}
+		b.label.Color = text
 		b.icon.Resource = b.iconRes
-		b.icon.Translucency = connectionDialogDisabledIconTranslucency
+		b.icon.Translucency = 0
 		b.bg.Refresh()
 		b.border.Refresh()
 		b.label.Refresh()
@@ -1247,6 +1284,7 @@ func showConnectionEditorDialog(parent fyne.Window, window fyne.Window, spec con
 			pasteActive = false
 			if linkBtn != nil {
 				linkBtn.SetLabel("Paste Link")
+				linkBtn.SetIcon(assets.LinkIconLime)
 			}
 			if d != nil {
 				d.Refresh()
@@ -1265,6 +1303,7 @@ func showConnectionEditorDialog(parent fyne.Window, window fyne.Window, spec con
 			pasteActive = true
 			if linkBtn != nil {
 				linkBtn.SetLabel("Manual")
+				linkBtn.SetIcon(assets.PencilIconLime)
 			}
 			if d != nil {
 				d.Refresh()
@@ -1358,6 +1397,11 @@ func showConnectionEditorDialog(parent fyne.Window, window fyne.Window, spec con
 			hoverBorderColor: design.ColorConnectionAddFill,
 			iconRes:          cIcon,
 			hoverIconRes:     cIcon,
+			// Connect's own fill is already dark (its lime lives in the
+			// text/border, not the fill) -- disabled just darkens that lime
+			// to design.ColorAccent instead of switching to gray; fill and
+			// border stay exactly as-is (disabledFillColor/BorderColor nil).
+			disabledTextColor: design.ColorAccent,
 		}
 		cBtn.ExtendBaseWidget(cBtn)
 		connectBtn = cBtn
@@ -1383,6 +1427,12 @@ func showConnectionEditorDialog(parent fyne.Window, window fyne.Window, spec con
 		hoverBorderColor: color.Transparent,
 		iconRes:          sIcon,
 		hoverIconRes:     sIcon,
+		// Save's pill fill is the teal accent itself -- disabled darkens
+		// that to connectionDialogTealDisabled instead of switching to
+		// gray; text stays the same dark color (still reads fine on the
+		// darker teal).
+		disabledFillColor: connectionDialogTealDisabled,
+		disabledTextColor: design.ColorGray950,
 	}
 	sBtn.ExtendBaseWidget(sBtn)
 	saveBtn = sBtn
@@ -1766,6 +1816,10 @@ type connectionDialogIconButton struct {
 	// disabled mutes this button and makes Tapped a no-op -- see SetDisabled.
 	// The paste view's Apply button uses this while its link field is empty.
 	disabled bool
+	// disabledFill overrides the shared muted-gray fallback with this
+	// button's own dimmed color (Apply uses connectionDialogTealDisabled,
+	// a darker shade of its normal teal, instead of a plain gray).
+	disabledFill color.Color
 }
 
 func newConnectionDialogIconButton(resource fyne.Resource, onTapped func()) *connectionDialogIconButton {
@@ -1860,9 +1914,15 @@ func (b *connectionDialogIconButton) refreshVisuals() {
 	b.icon.Resource = b.resource
 
 	if b.disabled {
-		b.bg.FillColor = connectionDialogDisabledFill
+		fill := b.disabledFill
+		if fill == nil {
+			fill = connectionDialogDisabledFill
+		}
+		b.bg.FillColor = fill
 		b.bdr.StrokeColor = color.Transparent
-		b.icon.Translucency = connectionDialogDisabledIconTranslucency
+		// Icon stays fully opaque -- Apply's dark checkmark on a dimmed
+		// teal pill still reads fine; fading it too just looked muddy.
+		b.icon.Translucency = 0
 		b.bg.Refresh()
 		b.icon.Refresh()
 		return
@@ -2154,6 +2214,7 @@ func newConnectionDialogInlinePasteView(parent fyne.Window, onApply func(interna
 	applyBtn.customHoverFill = color.NRGBA{R: 0x61, G: 0xf0, B: 0xd3, A: 0xff}
 	applyBtn.customNormalBorder = color.Transparent
 	applyBtn.customHoverBorder = color.Transparent
+	applyBtn.disabledFill = connectionDialogTealDisabled
 	// Disabled (muted) until there's something to actually apply -- an
 	// empty field couldn't have submitted anyway (parseQRContents rejects
 	// ""), this just shows that up front instead of only on tap.

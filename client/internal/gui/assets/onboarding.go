@@ -148,8 +148,15 @@ var (
 	// the card's resting-state gray; Lime is the shared hover/accent tint
 	// (addConnectionCardHoverColorHex and design.ColorConnectionAddFill
 	// are both this same "#c4e77a", so one variant covers both callers).
-	LinkIconMuted              = fyne.NewStaticResource("link-svgrepo-com-muted.svg", recolorStrokeIcon(linkIcon, "#c5c8b5", "2"))
-	LinkIconLime               = fyne.NewStaticResource("link-svgrepo-com-lime.svg", recolorStrokeIcon(linkIcon, "#c4e77a", "2"))
+	LinkIconMuted = fyne.NewStaticResource("link-svgrepo-com-muted.svg", recolorStrokeIcon(linkIcon, "#c5c8b5", "2"))
+	LinkIconLime  = fyne.NewStaticResource("link-svgrepo-com-lime.svg", recolorStrokeIcon(linkIcon, "#c4e77a", "2"))
+	// PencilIconLime -- the same edit-pencil glyph List/Grid's own edit
+	// pencil uses (connection-edit-title.svg's path, muted gray there),
+	// tinted the same lime as LinkIconLime -- the Add Connection dialog's
+	// Paste Link button swaps to this while showing "Manual", so the icon
+	// reads as "back to manual entry" instead of still showing the link
+	// glyph for an action that no longer pastes a link.
+	PencilIconLime             = fyne.NewStaticResource("connection-edit-lime.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="#c4e77a"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zm2.92 2.33H5v-.92l9.06-9.06.92.92L5.92 19.58zM20.71 7.04a1.003 1.003 0 0 0 0-1.42L18.37 3.29a1.003 1.003 0 0 0-1.42 0l-1.13 1.13 3.75 3.75 1.14-1.13z"/></svg>`))
 	ServerConnectIcon          = fyne.NewStaticResource("Server-Connect--Streamline-Atlas.svg", serverConnectIcon)
 	ServerConnectMuted         = fyne.NewStaticResource("Server-Connect--Streamline-Atlas-muted.svg", boldenServerIcon(serverConnectIcon, "#656565", "1.9"))
 	ServerConnectBold          = fyne.NewStaticResource("Server-Connect--Streamline-Atlas-bold.svg", boldenServerIcon(serverConnectIcon, "#111111", "1.9"))

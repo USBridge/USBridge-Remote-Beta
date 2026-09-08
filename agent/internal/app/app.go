@@ -528,7 +528,38 @@ func keepDisplayAwake(ctx context.Context) {
 	go func() { _ = cmd.Wait() }()
 }
 
+// startSunshine is the guarded entry point every caller *except* the
+// RustShine update flow itself should use: onExit (fired by
+// watchProcessExit on literally any process exit, deliberate or not -- see
+// its own doc comment) and sunshineWatchdog's periodic tick both go through
+// this. Skipping while RustShineUpdateInProgress is set closes a real race
+// confirmed live: stopRustShineForUpdate() calls a.stream.Stop() to release
+// the .exe's file lock before entitlement.StageRustShine's rename, but that
+// same Stop() also makes watchProcessExit fire onExit -- which used to call
+// this function directly and relaunch the *old* binary on the spot,
+// re-locking the file before the rename (or the periodic watchdog's own
+// independent 15s tick, landing in the same window) ever got a chance to
+// run. The update flow itself calls startSunshineNow directly (see
+// checkRustShineUpdate/CheckRustShineUpdateNow's own failure-recovery
+// calls, and RestartSunshine's self-contained stop+start for the success
+// path) precisely so its own deliberate restarts aren't the ones this
+// guard suppresses.
 func (a *App) startSunshine() {
+	a.entMu.Lock()
+	updateInProgress := a.entStatus.RustShineUpdateInProgress
+	a.entMu.Unlock()
+	if updateInProgress {
+		log.Printf("[app] startSunshine skipped -- rustshine update in progress, the update flow owns restarting it")
+		return
+	}
+	a.startSunshineNow()
+}
+
+// startSunshineNow is startSunshine's actual body, callable directly by the
+// RustShine update flow (see startSunshine's doc comment for why those
+// callers need to bypass the RustShineUpdateInProgress guard rather than
+// trip over it).
+func (a *App) startSunshineNow() {
 	if a.stream == nil {
 		return
 	}
@@ -1076,12 +1107,12 @@ func (a *App) refreshLocalEntitlementStatus() {
 	}
 }
 
-// EntitlementStatus reports the current license/trial state for the GUI
-// (and, over adminapi, a thin-client GUI attached to a separate headless
-// engine) to render the "Buy a license"/"Start free trial" affordance and,
-// once entitled, the Sunshine/RustShine switch. Cheap enough to poll on the
-// GUI's existing 2s refresh ticker (see ui.Window.performRefresh) -- no
-// push/SSE channel needed for this.
+// EntitlementStatus reports the current license state for the GUI (and,
+// over adminapi, a thin-client GUI attached to a separate headless engine)
+// to render the four-way license switcher and, once entitled, the
+// Sunshine/RustShine switch. Cheap enough to poll on the GUI's existing 2s
+// refresh ticker (see ui.Window.performRefresh) -- no push/SSE channel
+// needed for this.
 func (a *App) EntitlementStatus() entitlement.Status {
 	a.entMu.Lock()
 	st := a.entStatus
@@ -1090,13 +1121,6 @@ func (a *App) EntitlementStatus() entitlement.Status {
 	st.RustShineStaged = a.rustshineStaged()
 	st.RustShineVersion = entitlement.StagedVersion(a.cfg.StateDir)
 	st.WebRTCEnabled = !a.cfg.RustShineWebRTCDisabled
-	// TrialAvailable is "not currently linked under a trial or license
-	// token" -- best-effort/client-derived, see its own doc comment.
-	// Deliberately not re-derived from a fresh backend call on every poll
-	// (that would mean a network round trip every 2s); StartFreeTrial's
-	// own TrialUsed result is what authoritatively updates this when it
-	// actually matters (the user clicking the button).
-	st.TrialAvailable = !st.Linked
 	return st
 }
 
@@ -1136,14 +1160,12 @@ func (a *App) setEntError(msg string) {
 	a.entMu.Unlock()
 }
 
-// StartFreeTrial grants (or re-fetches) this machine's one-time 7-day
-// RustShine trial -- unlike the old Patreon login flow, this needs no
-// browser round trip at all, so it completes synchronously: one backend
-// call, bound to this machine's own hwid.Get() value. See
-// entitlement.StartTrial's doc comment for exactly why calling this
-// repeatedly (a fresh install, a config wipe, clicking the button twice)
-// can never grant a second window -- the backend's own record of this
-// hw_id, not anything client-side, is what enforces "once."
+// StartFreeTrial fetches this machine's current (always-available) free
+// tier token synchronously -- kept mainly for internal/adminapi's
+// thin-client "start-trial" call; there is nothing left to "start", the
+// backend's free tier is unconditional and permanent (see
+// entitlement.StartTrial's doc comment). Also handy as a manual "refresh
+// now" for the license dialog's default/no-purchase state.
 func (a *App) StartFreeTrial() error {
 	hwID, err := hwid.Get()
 	if err != nil {
@@ -1163,12 +1185,7 @@ func (a *App) StartFreeTrial() error {
 
 	res, err := entitlement.StartTrial(context.Background(), hwID)
 	if err != nil {
-		a.setEntError(fmt.Sprintf("could not start trial: %v", err))
-		return err
-	}
-	if res.TrialUsed {
-		err := fmt.Errorf("this machine's one-time 7-day trial has already been used")
-		a.setEntError("This machine's free trial has already been used — buy a license to continue.")
+		a.setEntError(fmt.Sprintf("could not reach the entitlement backend: %v", err))
 		return err
 	}
 
@@ -1177,19 +1194,20 @@ func (a *App) StartFreeTrial() error {
 }
 
 // StartPurchase asks the backend for a Stripe Checkout Session URL bound to
-// this machine's hardware id and begins polling for the purchase to land
-// in the background. Callers (the GUI) open the returned URL in the system
-// browser; EntitlementStatus reflects progress from here on (the GUI
-// already polls it on its own refresh ticker) -- no separate "purchase
-// complete" callback into this process, see pollForLicense.
-func (a *App) StartPurchase() (string, error) {
+// this machine's hardware id for the given tier ("pro" or "enterprise")
+// and begins polling for the purchase to land in the background. Callers
+// (the GUI) open the returned URL in the system browser; EntitlementStatus
+// reflects progress from here on (the GUI already polls it on its own
+// refresh ticker) -- no separate "purchase complete" callback into this
+// process, see pollForLicense.
+func (a *App) StartPurchase(tier string) (string, error) {
 	hwID, err := hwid.Get()
 	if err != nil {
 		a.setEntError(fmt.Sprintf("could not determine this machine's hardware id: %v", err))
 		return "", err
 	}
 
-	checkoutURL, err := entitlement.StartCheckoutURL(context.Background(), hwID)
+	checkoutURL, err := entitlement.StartCheckoutURL(context.Background(), hwID, tier)
 	if err != nil {
 		a.setEntError(fmt.Sprintf("could not start checkout: %v", err))
 		return "", err
@@ -1240,13 +1258,22 @@ func (a *App) CancelPurchase() {
 // webhook regardless of whether this loop already gave up.
 const pollForLicenseTimeout = 15 * time.Minute
 
-// pollForLicense repeatedly asks the backend whether hwID is licensed yet,
-// every 2s, until it is, ctx is cancelled (a newer StartPurchase call
-// superseded this one), or pollForLicenseTimeout elapses. There is no
-// server-side correlation state the way the old OAuth poll had (no "state"
-// param) -- hwID itself is the only thing being polled for, which is also
-// why this is safe to just call again from the GUI's own "Refresh" button
-// without needing to restart a checkout.
+// pollForLicense repeatedly asks the backend for hwID's current tier every
+// 2s, until it comes back as a paid tier (anything other than "free"), ctx
+// is cancelled (a newer StartPurchase call superseded this one), or
+// pollForLicenseTimeout elapses. There is no server-side correlation state
+// the way the old OAuth poll had (no "state" param) -- hwID itself is the
+// only thing being polled for, which is also why this is safe to just call
+// again from the GUI's own "Refresh" button without needing to restart a
+// checkout.
+//
+// Checking Status != "free" here (not just "did RefreshLicense succeed")
+// matters: register/refresh never fails anymore (see IssueResult's doc
+// comment) -- every call, including the very first one right after opening
+// a checkout tab, returns a perfectly valid "free" token. Treating any
+// successful response as "done" (as this loop used to, back when
+// NotLicensed was the only failure signal to check) would apply that free
+// token immediately and stop polling before the purchase even completed.
 func (a *App) pollForLicense(ctx context.Context, hwID string) {
 	deadline := time.Now().Add(pollForLicenseTimeout)
 	ticker := time.NewTicker(2 * time.Second)
@@ -1265,7 +1292,7 @@ func (a *App) pollForLicense(ctx context.Context, hwID string) {
 		if err != nil {
 			continue // transient network hiccup -- keep polling until the deadline or ctx cancellation
 		}
-		if res.NotLicensed {
+		if res.Status == "free" {
 			continue // payment not completed / webhook not landed yet
 		}
 		a.applyIssuedToken(res.Token, hwID)
@@ -1303,6 +1330,33 @@ func (a *App) applyIssuedToken(token, hwID string) {
 	// actively waiting on to stop showing its spinner: it shouldn't also
 	// block on a multi-MB download completing first.
 	go a.ensureRustShineFresh(context.Background(), token)
+}
+
+// bootstrapFreeTier silently links a fresh install to today's unconditional
+// free tier (see recheckEntitlement's call site) -- deliberately NOT
+// applyIssuedToken: this runs with no user action at all (just the app
+// starting up), so it must not also kick off an immediate multi-MB
+// RustShine download on every single install regardless of whether that
+// install ever wants RustShine. A later explicit tier pick in the license
+// dialog (StartFreeTrial/StartPurchase's own applyIssuedToken) is what
+// actually triggers that download.
+func (a *App) bootstrapFreeTier(ctx context.Context, hwID string) {
+	res, err := entitlement.RefreshLicense(ctx, hwID)
+	if err != nil {
+		log.Printf("[app] entitlement bootstrap failed (will retry next interval): %v", err)
+		return
+	}
+	if _, err := entitlement.VerifyForHardware(res.Token, hwID); err != nil {
+		log.Printf("[app] entitlement bootstrap: backend returned a token that doesn't verify locally: %v", err)
+		return
+	}
+
+	next := a.cfg
+	next.EntitlementToken = res.Token
+	if err := a.SaveConfig(next); err != nil {
+		log.Printf("[app] warning: failed to persist entitlement token: %v", err)
+	}
+	a.refreshLocalEntitlementStatus()
 }
 
 // AccountStatus returns a snapshot of the account-login state (see
@@ -1479,13 +1533,13 @@ func (a *App) RebindLicenseToThisDevice(oldIdentifier string) error {
 	}
 
 	res, err := entitlement.RefreshLicense(context.Background(), hwID)
-	if err != nil || res.NotLicensed {
+	if err != nil || res.Status == "free" {
 		// The rebind itself succeeded (backend confirmed it above) -- a
-		// failure here just means this machine hasn't picked up the fresh
-		// token yet (KV read lag, or a transient network hiccup);
-		// entitlementWatchdog's own periodic RefreshLicense call will catch
-		// up shortly, and the GUI's "Refresh" affordance re-drives this
-		// same path on demand.
+		// still-"free" (or failed) refresh here just means this machine
+		// hasn't picked up the fresh paid-tier token yet (KV read lag, or a
+		// transient network hiccup); entitlementWatchdog's own periodic
+		// RefreshLicense call will catch up shortly, and the GUI's
+		// "Refresh" affordance re-drives this same path on demand.
 		log.Printf("[app] rebind succeeded but refresh-license didn't pick it up yet: err=%v", err)
 	} else {
 		a.applyIssuedToken(res.Token, hwID)
@@ -1592,6 +1646,15 @@ func (a *App) ClearLicense() error {
 		return err
 	}
 	a.refreshLocalEntitlementStatus()
+	// Immediately re-bootstrap the free tier rather than leaving the
+	// license dialog on its "Setting up…" placeholder until
+	// entitlementWatchdog's next interval -- see recheckEntitlement's
+	// empty-token branch. Backgrounded: ClearLicense's own caller (the
+	// GUI) doesn't need to block on a network round trip just to clear a
+	// local file.
+	if hwID, err := hwid.Get(); err == nil {
+		go a.bootstrapFreeTier(context.Background(), hwID)
+	}
 	return nil
 }
 
@@ -1670,12 +1733,24 @@ func (a *App) entitlementWatchdog(ctx context.Context) {
 // this whole scheme is supposed to provide. This closes that gap: the
 // bound is enforced continuously, not just at the next restart.
 func (a *App) recheckEntitlement(ctx context.Context) {
-	if strings.TrimSpace(a.cfg.EntitlementToken) == "" {
-		return
-	}
 	hwID, err := hwid.Get()
 	if err != nil {
 		log.Printf("[app] entitlement recheck: could not determine hardware id: %v", err)
+		return
+	}
+
+	if strings.TrimSpace(a.cfg.EntitlementToken) == "" {
+		// Fresh install, never linked -- bootstrap today's unconditional
+		// free tier right away rather than leaving the license dialog's
+		// tier switcher with nothing to show until the user clicks
+		// something first (there's no "start trial" step to wait for
+		// anymore, see entitlement.StartTrial's doc comment). Deliberately
+		// NOT applyIssuedToken (which also kicks off an immediate
+		// RustShine download) -- staying on free tier with Sunshine active
+		// shouldn't silently pull down a multi-MB RustShine build nobody
+		// asked for yet; that still only happens once the user actually
+		// picks RustShine in the dialog.
+		a.bootstrapFreeTier(ctx, hwID)
 		return
 	}
 
@@ -1686,8 +1761,12 @@ func (a *App) recheckEntitlement(ctx context.Context) {
 		return
 	}
 	if claims.Provider == entitlement.ProviderDesktopTrial {
-		// Still locally valid (checked above) and not network-revocable
-		// -- nothing more to do until it expires on its own.
+		// This provider string now means "free tier" (see
+		// usbridge-entitlement-backend's desktopLicense.ts module doc
+		// comment for why it kept the old trial name) -- still locally
+		// valid (checked above) and not network-revocable, since free has
+		// nothing to refund. Nothing more to do until it expires on its
+		// own (and even then, the next refresh just gets a fresh one).
 		return
 	}
 
@@ -1696,8 +1775,8 @@ func (a *App) recheckEntitlement(ctx context.Context) {
 		log.Printf("[app] entitlement recheck failed (will retry next interval): %v", err)
 		return // cached token already verified locally above -- keep trusting it until it actually expires or a retry succeeds
 	}
-	if res.NotLicensed {
-		log.Printf("[app] license no longer on record for this hardware (refunded?) — switching back to Sunshine")
+	if res.Status == "free" {
+		log.Printf("[app] license no longer on record for this hardware (refunded/canceled?) — switching back to Sunshine")
 		a.downgradeToSunshine()
 		return
 	}
@@ -1777,10 +1856,12 @@ func (a *App) checkRustShineUpdate(ctx context.Context, entitlementToken string)
 	}
 	a.entStatus.RustShineUpdateInProgress = true
 	a.entMu.Unlock()
+	a.setRustShineUpdatePaused(true)
 	defer func() {
 		a.entMu.Lock()
 		a.entStatus.RustShineUpdateInProgress = false
 		a.entMu.Unlock()
+		a.setRustShineUpdatePaused(false)
 	}()
 
 	log.Printf("[app] rustshine update available (%s) — downloading", version)
@@ -1795,7 +1876,7 @@ func (a *App) checkRustShineUpdate(ctx context.Context, entitlementToken string)
 		// without video until the next 15s watchdog tick.
 		log.Printf("[app] rustshine auto-update to %s failed (will retry next interval): %v", version, err)
 		if stopped {
-			a.startSunshine()
+			a.startSunshineNow()
 		}
 		return
 	}
@@ -1804,6 +1885,19 @@ func (a *App) checkRustShineUpdate(ctx context.Context, entitlementToken string)
 	a.entStatus.RustShineStaged = a.rustshineStaged()
 	a.entMu.Unlock()
 	a.restartRustShineIfActive()
+}
+
+// setRustShineUpdatePaused tells the active backend (if it implements
+// streamhost.UpdatePauser -- currently just rustshine) to hold off opening
+// any new handle on its own executable for as long as an update is in
+// flight. See that interface's doc comment for the exact
+// --list-capture-devices race this closes; a no-op for any backend that
+// doesn't implement it (Sunshine has no equivalent hot-replace-while-running
+// concern).
+func (a *App) setRustShineUpdatePaused(paused bool) {
+	if up, ok := a.stream.(streamhost.UpdatePauser); ok {
+		up.SetUpdateInProgress(paused)
+	}
 }
 
 // stopRustShineForUpdate stops the active RustShine process before an
@@ -1830,6 +1924,21 @@ func (a *App) stopRustShineForUpdate() bool {
 	}
 	log.Printf("[app] stopping rustshine before staging update (Windows can't replace a running .exe)")
 	_ = a.stream.Stop()
+	// Stop() only kills the single instance this backend struct is tracking
+	// (b.proc) -- confirmed live as insufficient on its own: a manual
+	// StageRustShine run against a completely clean process list (zero
+	// gamestream-server.exe alive) staged and renamed in ~1.3s every time,
+	// while the exact same call from this update flow kept losing to
+	// "Access is denied" for the *entire* 20s renameWithRetry budget,
+	// despite Stop() reporting its tracked pid gone in milliseconds --
+	// meaning some second, untracked gamestream-server.exe instance (this
+	// backend struct never learned about it, so Stop() had nothing to kill
+	// it with) was the one actually holding the file open. Root cause of
+	// that second instance's existence not fully pinned down; this sweeps
+	// unconditionally by name as a belt-and-suspenders guarantee that
+	// nothing named gamestream-server.exe survives this point, regardless
+	// of how it got there or whether this backend ever tracked it.
+	_ = exec.Command("taskkill", "/F", "/IM", "gamestream-server.exe").Run()
 	// Stop() only signals termination; give the OS a moment to actually
 	// release the exe's image-section file lock before the upcoming rename.
 	time.Sleep(500 * time.Millisecond)
@@ -1910,10 +2019,20 @@ func (a *App) CheckRustShineUpdateNow() error {
 	a.entStatus.RustShineUpdateInProgress = true
 	a.entStatus.LastError = ""
 	a.entMu.Unlock()
+	// Same UpdatePauser guard checkRustShineUpdate's own background tick
+	// takes (see setRustShineUpdatePaused's doc comment) -- this manual
+	// button races the same --list-capture-devices helper the same way a
+	// silent watchdog tick does, so it needs the same protection. Set/reset
+	// here regardless of whether needsUpdate turns out true below: cheap
+	// no-op either way, and keeps a single place responsible for the
+	// pause/unpause pairing instead of threading a conditional through the
+	// early-return path too.
+	a.setRustShineUpdatePaused(true)
 	defer func() {
 		a.entMu.Lock()
 		a.entStatus.RustShineUpdateInProgress = false
 		a.entMu.Unlock()
+		a.setRustShineUpdatePaused(false)
 	}()
 
 	ctx := context.Background()
@@ -1932,7 +2051,7 @@ func (a *App) CheckRustShineUpdateNow() error {
 	if err := entitlement.StageRustShine(ctx, a.cfg.StateDir, token, nil); err != nil {
 		a.setEntError(fmt.Sprintf("update failed: %v", err))
 		if stopped {
-			a.startSunshine()
+			a.startSunshineNow()
 		}
 		return err
 	}

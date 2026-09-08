@@ -39,56 +39,42 @@ func Platform() string {
 	}
 }
 
-// IssueResult is the outcome of asking the backend for a license/trial
-// token bound to this machine's hwid.Get() value. Deliberately the same
-// shape for both StartTrial and RefreshLicense (mirrors
+// IssueResult is the outcome of asking the backend for a desktop token
+// bound to this machine's hwid.Get() value. Deliberately the same shape
+// for both StartTrial and RefreshLicense (mirrors
 // usbridge-entitlement-backend's own register/refresh being the same
-// handler) -- see each function's own doc comment for how NotLicensed vs.
-// TrialUsed differ in meaning.
+// handler).
 type IssueResult struct {
-	// NotLicensed: no purchase on record for this hardware id yet (or a
-	// prior purchase was refunded) -- RefreshLicense's own "not an error"
-	// outcome, expected for every install that hasn't bought a license.
-	NotLicensed bool
-	// TrialUsed: this hardware id's one-time 7-day trial window has
-	// already been granted AND has now passed -- StartTrial's own "not an
-	// error" outcome for a machine that already had its trial.
-	TrialUsed bool
+	// Status is "free", "pro", or "enterprise" -- see
+	// usbridge-entitlement-backend's desktopLicense.ts tier doc comment.
+	// register/refresh NEVER fail: every hardware id always gets a token,
+	// "free" by default, so there is no "not_licensed"/"trial_used"
+	// outcome to check for anymore -- Status alone tells the whole story.
+	Status    string
 	Token     string
 	ExpiresIn int // seconds
 }
 
-// StartTrial grants (or, if already granted and still inside its window,
-// re-fetches) this machine's one-time 7-day trial -- safe to call on every
-// app launch before a purchase: the backend's own KV record is what makes
-// this a no-op past the first successful grant (see
-// usbridge-entitlement-backend's desktopLicense.ts issueOrRefreshTrial),
-// not anything client-side, so wiping local config and calling this again
-// does NOT grant a second trial.
+// StartTrial is a thin back-compat wrapper around RefreshLicense, kept only
+// because internal/adminapi's thin-client protocol still exposes a
+// separate "start-trial" call. There is nothing left to "start" -- the
+// backend's free tier is unconditional and permanent (see
+// usbridge-entitlement-backend's desktopLicense.ts module doc comment) --
+// this just fetches today's free-tier token the same way RefreshLicense
+// would.
 func StartTrial(ctx context.Context, hwID string) (*IssueResult, error) {
-	reqBody, _ := json.Marshal(map[string]string{"hw_id": hwID})
-	var raw struct {
-		Status    string `json:"status"`
-		Trial     string `json:"trial"`
-		ExpiresIn int    `json:"expires_in"`
-	}
-	if err := doJSON(ctx, http.MethodPost, "/v1/desktop-license/trial-start", reqBody, "", &raw); err != nil {
-		return nil, err
-	}
-	if raw.Status == "trial_used" {
-		return &IssueResult{TrialUsed: true}, nil
-	}
-	return &IssueResult{Token: raw.Trial, ExpiresIn: raw.ExpiresIn}, nil
+	return RefreshLicense(ctx, hwID)
 }
 
-// RefreshLicense re-derives a fresh desktop-license token for this
-// machine's hardware id if (and only if) the backend currently has it on
-// record as licensed (i.e. a completed, not-since-refunded Stripe
-// purchase) -- called both right after StartCheckoutURL's flow completes
-// and on the periodic watchdog. No browser interaction, no stored
-// credential to refresh unlike the old Patreon flow's provider refresh
-// token -- hwID itself is the only correlating value, re-derived locally
-// (hwid.Get()) on every call rather than persisted.
+// RefreshLicense re-derives a fresh desktop token for this machine's
+// hardware id, reflecting whatever tier (free/pro/enterprise) the backend
+// currently has it on record as -- called both right after
+// StartCheckoutURL's flow completes and on the periodic watchdog. No
+// browser interaction, no stored credential to refresh unlike the old
+// Patreon flow's provider refresh token -- hwID itself is the only
+// correlating value, re-derived locally (hwid.Get()) on every call rather
+// than persisted. Never returns a "not licensed" outcome -- see
+// IssueResult's doc comment.
 func RefreshLicense(ctx context.Context, hwID string) (*IssueResult, error) {
 	reqBody, _ := json.Marshal(map[string]string{"hw_id": hwID})
 	var raw struct {
@@ -99,22 +85,20 @@ func RefreshLicense(ctx context.Context, hwID string) (*IssueResult, error) {
 	if err := doJSON(ctx, http.MethodPost, "/v1/desktop-license/refresh", reqBody, "", &raw); err != nil {
 		return nil, err
 	}
-	if raw.Status == "not_licensed" {
-		return &IssueResult{NotLicensed: true}, nil
-	}
-	return &IssueResult{Token: raw.License, ExpiresIn: raw.ExpiresIn}, nil
+	return &IssueResult{Status: raw.Status, Token: raw.License, ExpiresIn: raw.ExpiresIn}, nil
 }
 
 // StartCheckoutURL asks the backend for a Stripe Checkout Session URL tied
-// to this machine's hardware id -- open it in the system browser (or an
-// embedded webview; it's just an https:// URL either way). The backend's
-// webhook marks hwID licensed the moment payment completes; RefreshLicense
-// is what actually picks that up afterward -- there is no separate
-// "purchase complete" callback into this process the way the old OAuth
-// flow's poll loop had one; see app.go's pollForLicense for how the caller
-// bridges that gap.
-func StartCheckoutURL(ctx context.Context, hwID string) (string, error) {
-	reqBody, _ := json.Marshal(map[string]string{"hw_id": hwID})
+// to this machine's hardware id, for the given tier ("pro" or
+// "enterprise") -- open it in the system browser (or an embedded webview;
+// it's just an https:// URL either way). The backend's webhook marks hwID
+// licensed at that tier the moment payment completes; RefreshLicense is
+// what actually picks that up afterward -- there is no separate "purchase
+// complete" callback into this process the way the old OAuth flow's poll
+// loop had one; see app.go's pollForLicense for how the caller bridges
+// that gap.
+func StartCheckoutURL(ctx context.Context, hwID, tier string) (string, error) {
+	reqBody, _ := json.Marshal(map[string]string{"hw_id": hwID, "tier": tier})
 	var out struct {
 		URL string `json:"url"`
 	}

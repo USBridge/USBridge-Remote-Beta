@@ -136,6 +136,14 @@ type rustshineBackend struct {
 	lastLaunchAt time.Time
 	crashStreak  int
 
+	// updatePaused implements UpdatePauser -- see that interface's doc
+	// comment. Checked by ListCaptureDevices' Windows implementation
+	// (rustshine_devices_windows.go) before it spawns a fresh
+	// --list-capture-devices helper subprocess, which would otherwise be
+	// able to open a new handle on this same .exe during exactly the
+	// window an in-flight update needs it to stay unlocked for.
+	updatePaused bool
+
 	// sharedSecret is the agent's own master key, handed to gamestream-server
 	// via --webrtc-shared-secret so its native WebRTC signaling endpoint
 	// (POST /webrtc/offer) authenticates requests the same way every other
@@ -716,6 +724,20 @@ func (b *rustshineBackend) SetOnExit(fn func()) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.onExit = fn
+}
+
+// SetUpdateInProgress implements streamhost.UpdatePauser -- see that
+// interface's doc comment for why this exists.
+func (b *rustshineBackend) SetUpdateInProgress(inProgress bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.updatePaused = inProgress
+}
+
+func (b *rustshineBackend) isUpdatePaused() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.updatePaused
 }
 
 // Stop terminates a gamestream-server instance started by this backend.

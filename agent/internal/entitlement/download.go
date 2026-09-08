@@ -374,18 +374,27 @@ func writeAtomic(dest string, src io.Reader, perm os.FileMode) error {
 	return nil
 }
 
-// renameWithRetry retries os.Rename briefly on failure. On Windows,
-// replacing a just-killed process's own .exe can still fail with "Access is
-// denied" for a short window after the process is gone -- the OS doesn't
-// necessarily release the image section's file lock the instant the process
-// exits (confirmed live: a caller-side 500ms wait after Stop() before
-// staging still wasn't always enough). A no-op extra cost everywhere else:
-// the first attempt succeeds immediately on Linux/macOS (rename-over-open-
-// file is always allowed there) and in the normal case here too, this only
-// spins when the first attempt actually failed.
+// renameWithRetry retries os.Rename on failure. On Windows, replacing a
+// just-killed process's own .exe can still fail with "Access is denied"
+// well after the process is gone -- the OS doesn't necessarily release the
+// image section's file lock the instant the process exits (confirmed live:
+// a caller-side 500ms wait after Stop() before staging still wasn't always
+// enough), and a forcibly-killed (not gracefully exited) process makes this
+// worse, not better: TerminateProcess doesn't wait for the image section's
+// last reference to actually drop, and Windows Defender's real-time
+// protection scanning the freshly-renamed executable is a well-documented
+// separate cause of the exact same error that can hold a lock for several
+// seconds on its own -- confirmed live as the actual bound here: the
+// original 10*300ms (3s) budget was NOT always enough and a real update
+// failed with this exact error after exhausting it. 40*500ms (~20s) is a
+// no-op extra cost everywhere else: the first attempt succeeds immediately
+// on Linux/macOS (rename-over-open-file is always allowed there) and in the
+// normal Windows case too (the file usually IS free within the old 3s
+// window) -- this only spins longer when the first attempt actually failed
+// AND a real lock is still held past where the old budget gave up.
 func renameWithRetry(oldpath, newpath string) error {
-	const attempts = 10
-	const delay = 300 * time.Millisecond
+	const attempts = 40
+	const delay = 500 * time.Millisecond
 	var err error
 	for i := 0; i < attempts; i++ {
 		if i > 0 {

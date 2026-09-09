@@ -196,6 +196,10 @@ func (c *Client) RestartSunshine() error {
 	return c.do(http.MethodPost, "/token/restart-sunshine", nil, nil)
 }
 
+func (c *Client) SendSAS() error {
+	return c.do(http.MethodPost, "/token/send-sas", nil, nil)
+}
+
 func (c *Client) ListSunshineClients() ([]streamhost.Client, error) {
 	var clients []streamhost.Client
 	err := c.do(http.MethodGet, "/token/clients", nil, &clients)

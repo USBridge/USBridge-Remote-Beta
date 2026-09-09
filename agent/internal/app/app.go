@@ -34,6 +34,7 @@ import (
 	"usbridge_agent/internal/input"
 	"usbridge_agent/internal/netutil"
 	"usbridge_agent/internal/permissions"
+	"usbridge_agent/internal/sasinput"
 	"usbridge_agent/internal/streamhost"
 	"usbridge_agent/internal/tailscale"
 	"usbridge_agent/internal/ui"
@@ -954,6 +955,20 @@ func (a *App) SetSunshineCaptureMode(mode string) error {
 	return nil
 }
 
+// SendSAS raises a Secure Attention Sequence (Ctrl+Alt+Del) in whatever
+// session is currently on the physical console -- see sasinput's package
+// doc for why this exists at all: on a Windows machine with "require
+// CTRL+ALT+DEL" enabled, this is the one input a client's ordinary keyboard
+// injection can never reach on its own (Windows deliberately blocks
+// synthesized input from raising SAS), so a client stuck looking at that
+// prompt after the target locked has no way to actually get to the
+// password field without this. Windows-only; every other platform's
+// sasinput implementation just returns an error (there's no equivalent
+// concept to raise).
+func (a *App) SendSAS() error {
+	return sasinput.SendSecureAttentionSequence()
+}
+
 // RestartSunshine stops and relaunches the bundled Sunshine instance (if the
 // agent owns its lifecycle) so a config or capability change takes effect.
 func (a *App) RestartSunshine() error {
@@ -1039,6 +1054,19 @@ func (a *App) SetStreamBackend(kind string) error {
 	}
 
 	a.startSunshine() // generic despite the name -- starts whatever a.stream now is
+
+	// Mirrors RestartSunshine's own wait, for the same reason (see its doc
+	// comment): startSunshine only waits for the OS to fork the new
+	// backend's process, not for its own bootstrap (config parse, capture
+	// device enumeration, binding its HTTPS/RTSP/pairing listeners) to
+	// finish. Without this, a client that reconnects the instant this call
+	// returns can hit a port the new backend hasn't bound yet -- observed
+	// live as the client's pairing GET stalling for its full ~45s HTTP
+	// timeout, then one more failed attempt (RTSP DESCRIBE -1), before a
+	// third attempt finally landed after the backend had caught up on its
+	// own. WaitReady closes that window instead of relying on the client's
+	// own retry/backoff to eventually paper over it.
+	a.stream.WaitReady(a.cfg.SunshinePort, 5*time.Second)
 	a.waitForMonitorCorrelation()
 	a.restartStreamProxy()
 
@@ -1938,11 +1966,54 @@ func (a *App) stopRustShineForUpdate() bool {
 	// unconditionally by name as a belt-and-suspenders guarantee that
 	// nothing named gamestream-server.exe survives this point, regardless
 	// of how it got there or whether this backend ever tracked it.
-	_ = exec.Command("taskkill", "/F", "/IM", "gamestream-server.exe").Run()
+	killCmd := exec.Command("taskkill", "/F", "/IM", "gamestream-server.exe")
+	maybeHideWindow(killCmd)
+	_ = killCmd.Run()
 	// Stop() only signals termination; give the OS a moment to actually
 	// release the exe's image-section file lock before the upcoming rename.
 	time.Sleep(500 * time.Millisecond)
+	// Confirmed live: the plain taskkill above can still leave a
+	// gamestream-server.exe alive with "Access is denied" even from this
+	// same agent's own same-user call -- root cause not fully pinned down
+	// (not self-spawned: gamestream-server's own source spawns no child
+	// processes on Windows), but reproducible: a manual StageRustShine
+	// against a genuinely clean process list staged and renamed in ~1.3s
+	// every time, while this exact flow, with a survivor still present,
+	// lost to "Access is denied" for the entire 20s renameWithRetry budget
+	// regardless. Escalating to a UAC-elevated taskkill closes that gap the
+	// same-level sweep above can't: an elevated `taskkill /F` carries
+	// enough privilege to reach a process a plain same-user one can't, the
+	// same reason Task Manager's own "End task" needs "Run as
+	// administrator" for some processes. Only fires when something is
+	// actually still there (a UAC prompt on every single update, needed or
+	// not, would be needlessly disruptive) and is itself non-fatal on
+	// failure/decline/no-desktop-to-prompt-on -- StageRustShine's own
+	// caller already retries at the next interval and falls back to
+	// relaunching the old binary regardless of how this returns.
+	if a.perms != nil && processRunning("gamestream-server.exe") {
+		log.Printf("[app] gamestream-server.exe survived the plain taskkill -- requesting elevation to force it (a UAC prompt may appear)")
+		if err := a.perms.KillGamestreamServerElevated(); err != nil {
+			log.Printf("[app] elevated taskkill failed or was declined: %v", err)
+		} else {
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
 	return true
+}
+
+// processRunning reports whether any process named imageName (e.g.
+// "gamestream-server.exe") is currently running, via `tasklist`'s own
+// image-name filter -- used by stopRustShineForUpdate to decide whether the
+// plain taskkill above actually needs the elevated escalation, rather than
+// firing a UAC prompt unconditionally on every update.
+func processRunning(imageName string) bool {
+	cmd := exec.Command("tasklist", "/NH", "/FI", "IMAGENAME eq "+imageName)
+	maybeHideWindow(cmd)
+	out, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(string(out)), strings.ToLower(imageName))
 }
 
 // restartRustShineIfActive re-execs the running RustShine subprocess (via
@@ -2597,6 +2668,16 @@ func (a *App) SupportedVideoCodecs() []string {
 		port = 47990
 	}
 	return a.stream.SupportedVideoCodecs(port)
+}
+
+// Color444Status reports the RustShine Pro color upgrade's state -- see
+// Application interface's doc comment. (false, false) with no active
+// backend, matching CurrentVideoCodec's own "nothing to report yet" default.
+func (a *App) Color444Status() (active bool, available bool) {
+	if a.stream == nil {
+		return false, false
+	}
+	return a.stream.Color444Status()
 }
 
 // UnpairSunshineClient removes the Moonlight client with the given UUID from

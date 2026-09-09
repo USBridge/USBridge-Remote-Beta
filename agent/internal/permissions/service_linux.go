@@ -612,3 +612,9 @@ func (s *Service) RequestKMSCapture(capexecPath string) bool {
 func (s *Service) GPUClockLockSupported() bool                            { return false }
 func (s *Service) GPUClockLockElevated() bool                             { return false }
 func (s *Service) RequestGPUClockLock(binPath string, watchPID int) error { return nil }
+
+// KillGamestreamServerElevated is Windows-only -- see service_windows.go.
+// Linux has no UAC-style per-process elevation prompt, and a stray process
+// this agent's own SIGKILL couldn't already reach wouldn't be reachable via
+// any escalation this package could request here either.
+func (s *Service) KillGamestreamServerElevated() error { return nil }

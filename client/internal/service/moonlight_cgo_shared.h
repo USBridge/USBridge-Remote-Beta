@@ -216,7 +216,22 @@ int do_li_start(
     dr.stop             = dr_stop;
     dr.cleanup          = dr_cleanup;
     dr.submitDecodeUnit = dr_submit;
-    dr.capabilities     = CAPABILITY_DIRECT_SUBMIT;
+    // CAPABILITY_REFERENCE_FRAME_INVALIDATION_* tells moonlight-common-c
+    // this decoder can tolerate the corrupted/partial frames a reference-
+    // frame-invalidation recovery produces without crashing -- true of any
+    // real H.264/HEVC/AV1 decoder (libavcodec here; same as the official
+    // moonlight-qt/moonlight-android clients, which set the identical bits
+    // unconditionally for the same reason), never actually used unless the
+    // *host* also advertises `x-nv-video[0].refPicInvalidation` in its RTSP
+    // DESCRIBE response -- isReferenceFrameInvalidationEnabled() (Misc.c)
+    // requires both sides. Without this, a host that does advertise RFI
+    // support still gets the client falling back to full on-wire IDR
+    // requests with strict IDR-wait blocking on every loss event (confirmed
+    // live: a rust-shine host advertising the flag produced no behavior
+    // change at all client-side until this was added) -- silently, with no
+    // error, since ReferenceFrameInvalidationSupported alone was never
+    // enough on its own.
+    dr.capabilities = CAPABILITY_DIRECT_SUBMIT | CAPABILITY_REFERENCE_FRAME_INVALIDATION_AVC | CAPABILITY_REFERENCE_FRAME_INVALIDATION_HEVC | CAPABILITY_REFERENCE_FRAME_INVALIDATION_AV1;
 
     AUDIO_RENDERER_CALLBACKS ar;
     LiInitializeAudioCallbacks(&ar);

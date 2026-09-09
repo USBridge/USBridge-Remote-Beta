@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime/debug"
 	"strings"
+	"time"
 
 	"usbridge-client/internal/api"
 	"usbridge-client/internal/gui"
@@ -57,6 +58,21 @@ func main() {
 		if recovered := recover(); recovered != nil {
 			writeStartupPanicTrace(recovered)
 			logrus.Errorf("🔥 FATAL PANIC: %v\n%s", recovered, string(debug.Stack()))
+			// Flushes the panic line (and anything queued before it) out
+			// through the real writer before this process actually dies
+			// via the re-panic below -- see asyncLogWriter's own doc
+			// comment for why a plain `defer asyncWriter.Close(...)`
+			// elsewhere wouldn't reliably cover this specific path: Go
+			// runs deferred functions LIFO, so a flush-defer registered
+			// after this one would run *before* this handler's own
+			// logrus.Errorf call above, flushing nothing new. Calling it
+			// explicitly, right here, guarantees the panic message itself
+			// is what gets flushed, not just whatever was queued earlier.
+			// nil-safe: this can run before setupLogging ever assigns it,
+			// e.g. a panic during flag parsing.
+			if asyncLog != nil {
+				asyncLog.Close(2 * time.Second)
+			}
 			panic(recovered)
 		}
 	}()
@@ -74,6 +90,20 @@ func main() {
 	}
 
 	setupLogging(*logLevel)
+	// Normal-exit counterpart to the panic-recovery defer above -- flushes
+	// whatever's still queued in asyncLog before the process actually
+	// exits on any ordinary return from main(). Registered right after
+	// setupLogging assigns asyncLog, not up at the top of main(): Go's
+	// LIFO defer order means this needs to be the *first* one to run on
+	// the way out (so its own flush happens last, after everything else
+	// in this function -- including that panic-recovery defer's body --
+	// has finished logging), which registering it second (after the
+	// already-declared panic-recovery defer) achieves for free.
+	defer func() {
+		if asyncLog != nil {
+			asyncLog.Close(2 * time.Second)
+		}
+	}()
 	startPprofIfEnabled()
 
 	logrus.Infof("Starting %s version %s", appName, version)
@@ -184,9 +214,28 @@ func setupLogging(level string) {
 		return
 	}
 
-	logrus.SetOutput(output)
+	// Wraps `output` (stdout, the log file, or both) in a background-
+	// goroutine writer so a `logrus.*` call never blocks on the actual
+	// write(2)/console-write itself -- see asyncLogWriter's own doc
+	// comment for why this matters concretely (a real network-loss burst
+	// firing well over a hundred log lines in a couple of seconds,
+	// confirmed live, on the same CGO video/depacketizer thread that's
+	// simultaneously trying to recover the stream). Stored in the
+	// package-level `asyncLog` so main()'s shutdown paths (normal return
+	// and the panic-recovery handler) can flush it before the process
+	// actually exits -- see those two call sites' own doc comments.
+	asyncLog = newAsyncLogWriter(output)
+	logrus.SetOutput(asyncLog)
 	logrus.Infof("Logging initialized: %s", logFilePath)
 }
+
+// asyncLog is nil until setupLogging assigns it (so a panic before that --
+// e.g. during flag parsing -- has something safe to nil-check against in
+// main()'s panic-recovery handler) and, once assigned, lives for the rest
+// of the process: exactly one asyncLogWriter is ever created, matching
+// logrus's own single-global-logger design that setupLogging already
+// leans on throughout this file.
+var asyncLog *asyncLogWriter
 
 func loadConfig(configFile string) (*models.AppConfig, error) {
 	config := models.DefaultConfig()

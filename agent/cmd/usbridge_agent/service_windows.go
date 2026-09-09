@@ -12,6 +12,7 @@ import (
 	"golang.org/x/sys/windows/svc/mgr"
 
 	"usbridge_agent/internal/app"
+	"usbridge_agent/internal/sasinput"
 )
 
 const serviceName = "USBridgeAgent"
@@ -23,6 +24,15 @@ func runMain(headless bool) {
 		isSvc = false
 	}
 	if isSvc {
+		// Best-effort: SendSAS (app.SendSAS -> sasinput) needs this policy
+		// bit to do anything at all -- see EnsureServicesCanGenerateSAS's
+		// doc comment. A failure here (e.g. registry access somehow
+		// denied) shouldn't block the service from starting; it just means
+		// a later SendSAS call silently does nothing, same as it already
+		// does when the policy is unset.
+		if err := sasinput.EnsureServicesCanGenerateSAS(); err != nil {
+			log.Printf("could not enable SoftwareSASGeneration policy (Ctrl+Alt+Del injection on the lock screen may not work): %v", err)
+		}
 		err = svc.Run(serviceName, &agentService{})
 		if err != nil {
 			log.Fatalf("service execution failed: %v", err)

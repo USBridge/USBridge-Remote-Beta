@@ -6,10 +6,29 @@
 # (build_macos.sh's Contents/Frameworks/, build_linux.sh's AppImage AppDir,
 # build_windows.sh's dist folder next to the .exe, ...).
 #
-# darwin/linux get the plain CPU-only "onnxruntime" wheel -- CoreML
-# (darwin, always present in the OS) and OpenVINO (linux, opt-in via
-# setup_localui.sh) are this package's accelerator paths there, and neither
-# needs anything beyond the CPU wheel's onnxruntime lib itself.
+# darwin gets the plain CPU-only "onnxruntime" wheel -- CoreML (always
+# present in the OS) is this package's accelerator path there, and needs
+# nothing beyond the CPU wheel's onnxruntime lib itself.
+#
+# linux gets the "onnxruntime-openvino" wheel instead of plain "onnxruntime":
+# unlike CoreML/DirectML, OpenVINO's GPU plugin isn't compiled into the
+# stock onnxruntime build at all, so shipping the plain CPU wheel here (as
+# this script used to) left every Linux build's "GPU" toggle silently doing
+# nothing -- internal/localui/onnx.go's acceleratorEP would call
+# AppendExecutionProviderOpenVINO, find no onnxruntime_providers_openvino.so
+# next to libonnxruntime.so, and fall back to CPU every time. This used to
+# be an opt-in developer-only step via setup_localui.sh (reasoning being
+# "needs real system access to pick the right Intel driver stack"), but the
+# OpenVINO GPU *plugin* itself needs nothing system-specific -- it's fully
+# self-contained inside the PyPI wheel, same as onnxruntime-directml on
+# Windows; only the underlying Intel GPU compute runtime (i915 kernel
+# driver + intel-opencl-icd/intel-media-va-driver at the OS level) is a
+# real system dependency, and its absence just makes
+# AppendExecutionProviderOpenVINO fail to init, same safe CPU fallback as
+# always (see acceleratorEP's own doc comment). So there's no reason to
+# keep this Linux-only accelerator gated behind a separate manual script
+# step the way the (genuinely system-dependent) Paddle model export in
+# setup_localui.sh has to be.
 #
 # windows instead gets the "onnxruntime-directml" wheel: a build of the same
 # onnxruntime.dll with the DirectML execution provider compiled in, plus the
@@ -58,14 +77,14 @@
 # distro package -- verified for the macOS arm64 wheel before wiring this
 # into build_macos.sh.
 #
-# This intentionally does NOT install the OpenVINO execution provider
-# (onnxruntime-openvino, Linux/Intel-iGPU only) -- that stays an opt-in
-# developer enhancement via setup_localui.sh's existing flow (which needs
-# real system access to pick the right Intel driver stack). DirectML on
-# Windows is different: it's bundled unconditionally above because it needs
-# no system-specific setup at all -- any Windows box's own D3D12 driver is
-# enough -- so there's no reason to make it opt-in the way Linux's Intel-only
-# OpenVINO has to be. This script's job is otherwise narrow: guarantee a
+# setup_localui.sh's own OpenVINO fetch step (its "1. ONNX Runtime +
+# OpenVINO EP shared libraries" section) is now redundant with what this
+# script does for a linux target, but is left in place: it also builds the
+# venv route through the same onnxruntime-openvino wheel, so a dev running
+# it manually still gets an equivalent ~/.usbridge/localui/runtime, and
+# nothing here depends on that script also being run.
+#
+# This script's job is otherwise narrow: guarantee a
 # bundled app has a *working baseline* ONNX Runtime with zero assumptions
 # about what's installed on the machine it ends up running on, matching the
 # ONNX models already committed at internal/localui/models/ (see that
@@ -147,11 +166,13 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 mkdir -p "$WORK/wheel"
 
-# windows fetches "onnxruntime-directml" instead of plain "onnxruntime" --
-# see the header comment. Both are self-contained, no-deps wheels; only the
-# package name differs.
+# windows fetches "onnxruntime-directml", linux fetches "onnxruntime-openvino"
+# -- see the header comment. All three are self-contained, no-deps wheels;
+# only the package name (and which extra .so files get pulled out of it
+# below) differs.
 case "$TARGET_OS" in
     windows) PKG="onnxruntime-directml" ;;
+    linux)   PKG="onnxruntime-openvino" ;;
     *)       PKG="onnxruntime" ;;
 esac
 
@@ -196,6 +217,59 @@ fi
 cp "$SRC" "$OUT_DIR/$LIB_NAME"
 chmod 755 "$OUT_DIR/$LIB_NAME"
 echo "    -> $OUT_DIR/$LIB_NAME ($(du -h "$OUT_DIR/$LIB_NAME" | cut -f1), from $(basename "$SRC"))"
+
+# OpenVINO EP + its GPU plugin: onnxruntime_providers_openvino.so is
+# dlopen'd by libonnxruntime.so itself at the moment
+# AppendExecutionProviderOpenVINO gets called (internal/localui/onnx.go),
+# resolved relative to libonnxruntime.so's own directory -- same "sits next
+# to the main lib" convention as DirectML.dll below and
+# onnxruntime_providers_shared.dll always needs. Deliberately a trimmed
+# subset of what onnxruntime-openvino's capi/ dir actually ships: the
+# wheel also bundles libopenvino_intel_cpu_plugin.so (~65MB) and
+# libopenvino_intel_npu_plugin.so (~6MB), neither of which this project
+# ever requests (acceleratorEP always passes device_type=GPU, never
+# AUTO/CPU/NPU) -- when a graph node genuinely can't run on the GPU plugin,
+# ONNX Runtime's own default CPU EP (always present, not the OpenVINO
+# project's separate CPU plugin) handles it, so skipping those two costs
+# nothing at runtime and saves ~70MB in every Linux build.
+if [ "$TARGET_OS" = "linux" ]; then
+    CAPI_DIR="$WORK/pkg/onnxruntime/capi"
+    OV_COPIED=0
+    copy_ov() {
+        [ -f "$CAPI_DIR/$1" ] || return 1
+        cp "$CAPI_DIR/$1" "$OUT_DIR/$1"
+        chmod 755 "$OUT_DIR/$1"
+        OV_COPIED=$((OV_COPIED + 1))
+    }
+    # Fixed names, no version string to resolve.
+    copy_ov libonnxruntime_providers_shared.so
+    copy_ov libonnxruntime_providers_openvino.so
+    copy_ov libopenvino_intel_gpu_plugin.so
+    # libopenvino*/libtbb* ship SONAME-versioned (e.g. "libopenvino.so.2541")
+    # -- that exact version string isn't something to hardcode here, it'll
+    # move on every OpenVINO release this wheel picks up. The wheel also
+    # ships duplicate, non-SONAME copies of the same payload next to each
+    # (a bare "libopenvino.so" and a "libopenvino.so.2025.4.1"-style middle
+    # alias, full copies not symlinks -- ~25MB+7MB wasted per extra copy),
+    # so rather than guess which glob match is the real one, ask the
+    # binaries that actually DT_NEED them: readelf -d's NEEDED lines name
+    # the exact SONAME each of the three files above was linked against.
+    if command -v readelf >/dev/null 2>&1; then
+        NEEDED_LIBS="$( (readelf -d "$CAPI_DIR/libonnxruntime_providers_openvino.so" 2>/dev/null; \
+                          readelf -d "$CAPI_DIR/libopenvino_intel_gpu_plugin.so" 2>/dev/null) \
+                         | grep -oE '\[lib(openvino|tbb)[^]]*\.so[0-9.]*\]' | tr -d '[]' | sort -u)"
+        while IFS= read -r lib; do
+            [ -n "$lib" ] && copy_ov "$lib"
+        done <<< "$NEEDED_LIBS"
+    else
+        echo "!! fetch_onnxruntime.sh: no readelf on this host -- can't resolve libopenvino.so's exact SONAME, Intel GPU acceleration will stay unavailable in this build (CPU EP still works)" >&2
+    fi
+    if [ "$OV_COPIED" -ge 3 ]; then
+        echo "    -> $OUT_DIR/{providers_openvino,libopenvino*,libtbb*}.so ($OV_COPIED files, $(du -sh "$OUT_DIR" | cut -f1) total) -- Intel iGPU acceleration"
+    else
+        echo "!! fetch_onnxruntime.sh: only found $OV_COPIED/5 expected OpenVINO EP files -- Intel GPU acceleration will stay unavailable, CPU EP still works" >&2
+    fi
+fi
 
 # DirectML.dll: onnxruntime.dll dlopen's this at the moment
 # AppendExecutionProviderDirectML actually gets called (internal/localui/

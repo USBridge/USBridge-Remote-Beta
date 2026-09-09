@@ -39,3 +39,7 @@ func (s *Service) GPUClockLockElevated() bool { return false }
 // RequestGPUClockLock is a no-op off Windows -- see service_windows.go's
 // real implementation.
 func (s *Service) RequestGPUClockLock(binPath string, watchPID int) error { return nil }
+
+// KillGamestreamServerElevated is a no-op off Windows -- see
+// service_windows.go's real implementation.
+func (s *Service) KillGamestreamServerElevated() error { return nil }

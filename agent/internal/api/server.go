@@ -55,6 +55,11 @@ type Application interface {
 	// SupportedVideoCodecs returns which of h264/h265/av1 the host's hardware
 	// encoder can actually produce right now (Sunshine's live capability probe).
 	SupportedVideoCodecs() []string
+	// Color444Status reports the RustShine Pro color upgrade's state: active
+	// is whether the current/most recent session actually negotiated 4:4:4
+	// chroma, available is whether this host could offer it right now
+	// (hardware AND license tier). Always (false, false) on Sunshine.
+	Color444Status() (active bool, available bool)
 	AudioSinks() ([]AudioSink, error)
 	CurrentAudioSink() (string, error)
 	SetAudioSink(sink string) error
@@ -692,6 +697,7 @@ func (s *Server) videoInfo(w http.ResponseWriter, r *http.Request) {
 
 	moonlightHost := s.app.SunshineStreamHost()
 	sunshinePort := s.app.SunshineAdminPort()
+	color444Active, color444Available := s.app.Color444Status()
 	s.ok(w, "video_info", map[string]any{
 		"device":            devicePath,
 		"width":             width,
@@ -706,6 +712,14 @@ func (s *Server) videoInfo(w http.ResponseWriter, r *http.Request) {
 		"available_devices": devices,
 		"moonlight_host":    moonlightHost,
 		"sunshine_port":     sunshinePort,
+		// RustShine Pro's $8/mo color upgrade -- see
+		// Application.Color444Status's doc comment. "active" reflects the
+		// most recently started session (post-fallback truth, same as
+		// "encoding"); "available" is whether the popup's 4:4:4 checkbox
+		// should even be shown/enabled before the user has started
+		// streaming at all.
+		"color_444_active":    color444Active,
+		"color_444_available": color444Available,
 	})
 }
 

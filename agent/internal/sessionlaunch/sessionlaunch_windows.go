@@ -87,6 +87,66 @@ func enableSeTcbPrivilege() error {
 	return nil
 }
 
+// buildSystemSessionToken returns a primary token that is (a) SYSTEM's own
+// identity/privileges and (b) stamped with sessionID, so a process launched
+// with it via CreateProcessAsUser both lands in the right session (for
+// DXGI/GPU/audio access, same reason LaunchInActiveSession exists at all --
+// see this package's doc comment) and, critically, is actually *allowed* to
+// call OpenInputDesktop on WinSta0\Winlogon or a UAC secure desktop.
+//
+// This used to duplicate the session's real logged-in user's own token
+// instead (via WTSQueryUserToken), which is enough for the ordinary
+// unlocked desktop but not for anything past it: Winlogon and the anonymous
+// UAC secure desktop are deliberately locked down to SYSTEM only -- an
+// ordinary user token gets ERROR_ACCESS_DENIED from OpenInputDesktop there
+// no matter what privileges it holds, by design (that lockdown *is* Secure
+// Desktop's whole security property). It also fails outright with no
+// logged-in user in the target session at all (a bare logon screen,
+// WTSQueryUserToken returns ERROR_NO_TOKEN). Stamping SYSTEM's own token
+// with the target SessionId instead covers every case uniformly: bare logon
+// screen, ordinary logged-in desktop, and locked/UAC secure desktop -- the
+// same architecture RustDesk's Windows backend uses for exactly this reason
+// (see WindowsService/create_process_as_user in their src/platform/windows.rs).
+// capture_dxgi's attach_input_desktop (crates/capture-dxgi/src/windows.rs)
+// and enet-input's matching helper (crates/enet-input/src/sendinput.rs) are
+// the other half of this: they re-resolve and attach to whatever desktop is
+// actually active, at runtime, on the SYSTEM identity this now provides.
+func buildSystemSessionToken(sessionID uint32) (windows.Token, error) {
+	var procToken windows.Token
+	if err := windows.OpenProcessToken(
+		windows.CurrentProcess(),
+		windows.TOKEN_DUPLICATE|windows.TOKEN_QUERY|windows.TOKEN_ADJUST_DEFAULT|windows.TOKEN_ASSIGN_PRIMARY,
+		&procToken,
+	); err != nil {
+		return 0, fmt.Errorf("OpenProcessToken: %w", err)
+	}
+	defer procToken.Close()
+
+	var primaryToken windows.Token
+	if err := windows.DuplicateTokenEx(
+		procToken,
+		windows.MAXIMUM_ALLOWED,
+		nil,
+		windows.SecurityImpersonation,
+		windows.TokenPrimary,
+		&primaryToken,
+	); err != nil {
+		return 0, fmt.Errorf("DuplicateTokenEx: %w", err)
+	}
+
+	sid := sessionID
+	if err := windows.SetTokenInformation(
+		primaryToken,
+		windows.TokenSessionId,
+		(*byte)(unsafe.Pointer(&sid)),
+		uint32(unsafe.Sizeof(sid)),
+	); err != nil {
+		primaryToken.Close()
+		return 0, fmt.Errorf("SetTokenInformation(TokenSessionId=%d): %w", sessionID, err)
+	}
+	return primaryToken, nil
+}
+
 // Handle wraps a process started via CreateProcessAsUser. exec.Cmd can't
 // represent this (Go's os/exec has no CreateProcessAsUser support), so
 // this provides the minimal Pid/Kill/Wait surface callers need instead.
@@ -124,11 +184,13 @@ func (h *Handle) Close() {
 }
 
 // LaunchInActiveSession starts exe (with args) inside the currently active
-// console session's interactive desktop, running as that session's logged
-// -in user (not SYSTEM). workDir may be "". stdout/stderr, if non-nil, are
-// inherited by the child (pass *os.File with SetInheritable-safe handles --
-// os.OpenFile-returned files work directly). Returns an error wrapping
-// ErrNoActiveSession if nobody is currently attached to the console.
+// console session's interactive desktop, running as SYSTEM stamped into
+// that session (not the logged-in user's own token -- see
+// buildSystemSessionToken's doc comment for why). workDir may be "".
+// stdout/stderr, if non-nil, are inherited by the child (pass *os.File with
+// SetInheritable-safe handles -- os.OpenFile-returned files work directly).
+// Returns an error wrapping ErrNoActiveSession if nobody is currently
+// attached to the console.
 func LaunchInActiveSession(exe string, args []string, workDir string, stdout, stderr *os.File, extraEnv map[string]string) (*Handle, error) {
 	sessionID, ok := ActiveConsoleSessionID()
 	if !ok {
@@ -139,22 +201,9 @@ func LaunchInActiveSession(exe string, args []string, workDir string, stdout, st
 		return nil, fmt.Errorf("enable SeTcbPrivilege: %w", err)
 	}
 
-	var userToken windows.Token
-	if err := windows.WTSQueryUserToken(sessionID, &userToken); err != nil {
-		return nil, fmt.Errorf("WTSQueryUserToken(session=%d): %w", sessionID, err)
-	}
-	defer userToken.Close()
-
-	var primaryToken windows.Token
-	if err := windows.DuplicateTokenEx(
-		userToken,
-		windows.MAXIMUM_ALLOWED,
-		nil,
-		windows.SecurityImpersonation,
-		windows.TokenPrimary,
-		&primaryToken,
-	); err != nil {
-		return nil, fmt.Errorf("DuplicateTokenEx: %w", err)
+	primaryToken, err := buildSystemSessionToken(sessionID)
+	if err != nil {
+		return nil, err
 	}
 	defer primaryToken.Close()
 

@@ -10,9 +10,13 @@ import (
 )
 
 // statusResponse mirrors gamestream-server's confirmed GET /api/status JSON
-// shape: {"active_video_codec": "h264"|"h265"}.
+// shape: {"active_video_codec": "h264"|"h265", "active_pixel_format": "...",
+// "active_chroma_444": bool, "color_444_available": bool} -- see
+// gamestream_proto::http::admin::StatusInfo.
 type statusResponse struct {
-	ActiveVideoCodec string `json:"active_video_codec"`
+	ActiveVideoCodec  string `json:"active_video_codec"`
+	ActiveChroma444   bool   `json:"active_chroma_444"`
+	Color444Available bool   `json:"color_444_available"`
 }
 
 // rustshineAdminHTTPClient is shared across every CurrentVideoCodec call --
@@ -41,12 +45,13 @@ var rustshineAdminHTTPClient = &http.Client{
 	},
 }
 
-// CurrentVideoCodec queries gamestream-server's own /api/status admin route
-// directly — unlike Sunshine, there's no documented log line to scrape as a
-// fallback, but the admin API is always reachable once the process is up
-// (confirmed route, HTTP Basic Auth), so no fallback is needed. Defaults to
-// "h264" if the server isn't reachable yet.
-func (b *rustshineBackend) CurrentVideoCodec() string {
+// fetchStatus hits gamestream-server's own /api/status admin route directly
+// — unlike Sunshine, there's no documented log line to scrape as a fallback,
+// but the admin API is always reachable once the process is up (confirmed
+// route, HTTP Basic Auth). Returns nil on any failure (not reachable yet,
+// bad response) -- callers each have their own "what to report before a
+// session has ever run" default, so this doesn't pick one itself.
+func (b *rustshineBackend) fetchStatus() *statusResponse {
 	b.mu.Lock()
 	adminPort := b.adminPort
 	b.mu.Unlock()
@@ -56,23 +61,43 @@ func (b *rustshineBackend) CurrentVideoCodec() string {
 	url := fmt.Sprintf("https://%s:%d/api/status", adminHost(), adminPort)
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
-		return "h264"
+		return nil
 	}
 	req.SetBasicAuth(b.AdminUser(), b.AdminPass())
 	resp, err := rustshineAdminHTTPClient.Do(req)
 	if err != nil {
-		return "h264"
+		return nil
 	}
 	defer resp.Body.Close()
 	var status statusResponse
 	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
 		log.Printf("[rustshine] /api/status decode failed: %v", err)
-		return "h264"
+		return nil
 	}
-	if status.ActiveVideoCodec == "" {
+	return &status
+}
+
+// CurrentVideoCodec reports which codec the most recent (or current)
+// session actually negotiated. Defaults to "h264" if the server isn't
+// reachable yet.
+func (b *rustshineBackend) CurrentVideoCodec() string {
+	status := b.fetchStatus()
+	if status == nil || status.ActiveVideoCodec == "" {
 		return "h264"
 	}
 	return status.ActiveVideoCodec
+}
+
+// Color444Status reports the RustShine Pro color upgrade's state -- see
+// CodecProbe's doc comment. Defaults to (false, false) if the server isn't
+// reachable yet, matching CurrentVideoCodec's own "assume nothing special"
+// default.
+func (b *rustshineBackend) Color444Status() (active bool, available bool) {
+	status := b.fetchStatus()
+	if status == nil {
+		return false, false
+	}
+	return status.ActiveChroma444, status.Color444Available
 }
 
 // SupportedVideoCodecs reuses the exact same /serverinfo NvHTTP probe as

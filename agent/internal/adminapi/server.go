@@ -34,6 +34,7 @@ type TokenBackend interface {
 	LockGPUClocksEnabled() bool
 	SetLockGPUClocksEnabled(enabled bool) error
 	RestartSunshine() error
+	SendSAS() error
 	ListSunshineClients() ([]streamhost.Client, error)
 	UnpairSunshineClient(uniqueID string) error
 	SubmitMoonlightPIN(pin string) error
@@ -183,6 +184,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /token/gpu-clock-lock-enabled", s.handleGPUClockLockEnabled)
 	mux.HandleFunc("POST /token/gpu-clock-lock-enabled", s.handleSetGPUClockLockEnabled)
 	mux.HandleFunc("POST /token/restart-sunshine", s.handleRestartSunshine)
+	mux.HandleFunc("POST /token/send-sas", s.handleSendSAS)
 	mux.HandleFunc("GET /token/clients", s.handleListClients)
 	mux.HandleFunc("POST /token/unpair", s.handleUnpair)
 	mux.HandleFunc("POST /token/pin", s.handlePIN)
@@ -324,6 +326,14 @@ func (s *Server) handleSetGPUClockLockEnabled(w http.ResponseWriter, r *http.Req
 
 func (s *Server) handleRestartSunshine(w http.ResponseWriter, r *http.Request) {
 	if err := s.token.RestartSunshine(); err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, struct{}{})
+}
+
+func (s *Server) handleSendSAS(w http.ResponseWriter, r *http.Request) {
+	if err := s.token.SendSAS(); err != nil {
 		writeError(w, err)
 		return
 	}

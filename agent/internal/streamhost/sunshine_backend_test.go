@@ -268,24 +268,25 @@ func newServerInfoStubCounting(t *testing.T, codecModeSupport int, calls *int) (
 
 // This is the exact bug behind "Sunshine crashed, and the popup/API just
 // silently stopped updating until the whole agent was restarted": Start()'s
-// "already running, no-op" fast path only reads b.cmd/b.cmd.Process, which
-// exec.Cmd never clears on its own when the OS process dies out from under
-// it. Nothing used to notice the child had exited, so a crashed Sunshine
-// (e.g. the ENet null-pointer-dereference in host_create — see
-// itsme228/Sunshine's network.cpp) stayed "believed alive" forever.
+// "already running, no-op" fast path only reads b.proc, which exec.Cmd
+// never clears on its own when the OS process dies out from under it.
+// Nothing used to notice the child had exited, so a crashed Sunshine (e.g.
+// the ENet null-pointer-dereference in host_create — see itsme228/
+// Sunshine's network.cpp) stayed "believed alive" forever.
 func TestWatchProcessExit_ClearsCmdOnExit(t *testing.T) {
 	cmd := exec.Command("/bin/sh", "-c", "exit 1")
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start test process: %v", err)
 	}
-	b := &sunshineBackend{cmd: cmd}
+	proc := sunshineExecCmdProcess{cmd}
+	b := &sunshineBackend{proc: proc}
 	if !b.Running() {
 		t.Fatal("sanity check: Running() should be true immediately after Start()")
 	}
 
 	done := make(chan struct{})
 	go func() {
-		b.watchProcessExit(cmd)
+		b.watchProcessExit(proc)
 		close(done)
 	}()
 
@@ -300,8 +301,8 @@ func TestWatchProcessExit_ClearsCmdOnExit(t *testing.T) {
 	}
 }
 
-// A stale watcher for an OLD cmd (already replaced by Stop()+a fresh Start())
-// must not clobber the newer, still-running b.cmd.
+// A stale watcher for an OLD proc (already replaced by Stop()+a fresh
+// Start()) must not clobber the newer, still-running b.proc.
 func TestWatchProcessExit_DoesNotClobberNewerCmd(t *testing.T) {
 	oldCmd := exec.Command("/bin/sh", "-c", "exit 0")
 	if err := oldCmd.Start(); err != nil {
@@ -316,11 +317,13 @@ func TestWatchProcessExit_DoesNotClobberNewerCmd(t *testing.T) {
 		_, _ = newCmd.Process.Wait()
 	}()
 
-	b := &sunshineBackend{cmd: newCmd} // simulates: oldCmd already replaced by a fresh Start()
+	oldProc := sunshineExecCmdProcess{oldCmd}
+	newProc := sunshineExecCmdProcess{newCmd}
+	b := &sunshineBackend{proc: newProc} // simulates: oldCmd already replaced by a fresh Start()
 
 	done := make(chan struct{})
 	go func() {
-		b.watchProcessExit(oldCmd)
+		b.watchProcessExit(oldProc)
 		close(done)
 	}()
 
@@ -331,10 +334,10 @@ func TestWatchProcessExit_DoesNotClobberNewerCmd(t *testing.T) {
 	}
 
 	b.mu.Lock()
-	got := b.cmd
+	got := b.proc
 	b.mu.Unlock()
-	if got != newCmd {
-		t.Error("watchProcessExit for a stale/replaced cmd must not clear a newer b.cmd")
+	if got != newProc {
+		t.Error("watchProcessExit for a stale/replaced cmd must not clear a newer b.proc")
 	}
 }
 
@@ -350,7 +353,8 @@ func TestWatchProcessExit_FiresOnExitCallback(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start test process: %v", err)
 	}
-	b := &sunshineBackend{cmd: cmd}
+	proc := sunshineExecCmdProcess{cmd}
+	b := &sunshineBackend{proc: proc}
 
 	fired := make(chan struct{})
 	b.SetOnExit(func() {
@@ -364,7 +368,7 @@ func TestWatchProcessExit_FiresOnExitCallback(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		b.watchProcessExit(cmd)
+		b.watchProcessExit(proc)
 		close(done)
 	}()
 
@@ -396,13 +400,13 @@ func TestWatchProcessExit_DoesNotFireOnExitForStaleCmd(t *testing.T) {
 		_, _ = newCmd.Process.Wait()
 	}()
 
-	b := &sunshineBackend{cmd: newCmd}
+	b := &sunshineBackend{proc: sunshineExecCmdProcess{newCmd}}
 	fired := false
 	b.SetOnExit(func() { fired = true })
 
 	done := make(chan struct{})
 	go func() {
-		b.watchProcessExit(oldCmd)
+		b.watchProcessExit(sunshineExecCmdProcess{oldCmd})
 		close(done)
 	}()
 	select {

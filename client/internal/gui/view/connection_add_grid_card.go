@@ -67,6 +67,61 @@ var (
 	addConnectionCardButtonHoverTint = color.NRGBA{R: 0xc4, G: 0xe7, B: 0x7a, A: 0x40}
 )
 
+// addConnectionPlusIconNormal/Hover are the "+" glyph NewAddConnectionGridCard
+// and newAddConnectionPlusControl both draw inside their ring -- a plain
+// line-only path (see NewAddConnectionGridCard's own doc comment on why:
+// oksvg never rendered the two-arc version), hoisted to package scope so
+// both places share the exact same resource instead of rebuilding it.
+var (
+	addConnectionPlusIconNormal = fyne.NewStaticResource("add-device-plus.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="`+addConnectionCardMutedColorHex+`"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>`))
+	addConnectionPlusIconHover  = fyne.NewStaticResource("add-device-plus-hover.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="`+addConnectionCardHoverColorHex+`"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>`))
+)
+
+// newAddConnectionPlusControl builds the same dashed-ring "+" button
+// NewAddConnectionGridCard's own addControl draws (native canvas.Circle
+// ring, the line-only plus glyph above, both swapping to the lime hover
+// colors) -- reused as-is by List mode's zero-items placeholder row (see
+// newConnectionListAddRow) so both entry points into the Add Connection
+// dialog look and behave identically. Unlike the Grid card's version, whose
+// ring/icon react to the whole card's hover (wired externally via
+// spec.OnHover, see NewAddConnectionGridCard's setHovered), this one only
+// ever sits in a table cell with nothing else to hover with, so it drives
+// its own ring/icon recolor off the button's own hover directly.
+func newAddConnectionPlusControl(onAdd func()) fyne.CanvasObject {
+	plusImg := canvas.NewImageFromResource(addConnectionPlusIconNormal)
+	plusImg.FillMode = canvas.ImageFillContain
+	plusImg.SetMinSize(fyne.NewSize(18, 18))
+
+	addRing := canvas.NewCircle(color.Transparent)
+	addRing.StrokeColor = addConnectionCardMutedColor
+	addRing.StrokeWidth = 1.5
+	addRingSized := container.NewGridWrap(fyne.NewSize(48, 48), addRing)
+
+	addBtn := newIconChromeButton(iconChromeButtonSpec{
+		NormalFill:   color.Transparent,
+		HoverFill:    addConnectionCardButtonHoverTint,
+		Stroke:       color.Transparent,
+		CornerRadius: 24, // half of ButtonSize's 48 -> full circle
+		ButtonSize:   fyne.NewSize(48, 48),
+		OnTapped:     onAdd,
+		OnHover: func(hovered bool) {
+			if hovered {
+				addRing.StrokeColor = addConnectionCardHoverColor
+				addRing.FillColor = addConnectionCardRingHoverTint
+				plusImg.Resource = addConnectionPlusIconHover
+			} else {
+				addRing.StrokeColor = addConnectionCardMutedColor
+				addRing.FillColor = color.Transparent
+				plusImg.Resource = addConnectionPlusIconNormal
+			}
+			addRing.Refresh()
+			plusImg.Refresh()
+		},
+	})
+
+	return container.NewStack(addRingSized, container.NewCenter(plusImg), addBtn)
+}
+
 // NewAddConnectionGridCard builds the dashed-bordered placeholder tile.
 func NewAddConnectionGridCard(actions AddConnectionCardActions) fyne.CanvasObject {
 	// plus-circle-svgrepo-com.svg's own glyph relies on two overlapping
@@ -88,8 +143,8 @@ func NewAddConnectionGridCard(actions AddConnectionCardActions) fyne.CanvasObjec
 	// smaller "even lighter" tint (HoverFill) for when the cursor is
 	// directly over the circle -- on top of, not instead of, the
 	// card-hover state it also triggers via spec.OnHover below.
-	plusIconNormal := fyne.NewStaticResource("add-device-plus.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="`+addConnectionCardMutedColorHex+`"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>`))
-	plusIconHover := fyne.NewStaticResource("add-device-plus-hover.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="`+addConnectionCardHoverColorHex+`"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>`))
+	plusIconNormal := addConnectionPlusIconNormal
+	plusIconHover := addConnectionPlusIconHover
 	plusImg := canvas.NewImageFromResource(plusIconNormal)
 	plusImg.FillMode = canvas.ImageFillContain
 	plusImg.SetMinSize(fyne.NewSize(18, 18))

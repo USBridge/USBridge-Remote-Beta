@@ -72,11 +72,13 @@ var (
 
 	// connectionListAddOnlyColumn{Labels,Widths} is the table's shape when
 	// there are zero saved connections and the only row is the "Add New
-	// Connect" placeholder (see buildConnectionsListAddOnlyTable) -- OS/
-	// STATE/NETWORK/ROUTE BRIDGE have nothing real to show for a row that
-	// isn't a connection, so only NAME and ACTIONS survive.
-	connectionListAddOnlyColumnLabels = []string{"NAME", "ACTIONS"}
-	connectionListAddOnlyColumnWidths = []float32{0, 150}
+	// Connect" placeholder (see buildConnectionsListAddOnlyTable) -- STATE/
+	// NETWORK/ROUTE BRIDGE have nothing real to show for a row that isn't a
+	// connection, so those drop; OS is replaced by the same "+" control
+	// NewAddConnectionGridCard opens its Add Connection dialog with (see
+	// newConnectionListAddRow), not a status dot.
+	connectionListAddOnlyColumnLabels = []string{"", "NAME", "ACTIONS"}
+	connectionListAddOnlyColumnWidths = []float32{56, 0, 150}
 )
 
 const connectionListColumnGap float32 = 16
@@ -193,17 +195,21 @@ func buildConnectionsListAddOnlyTable(actions AddConnectionCardActions) fyne.Can
 }
 
 // newConnectionListAddRow is List mode's "Add New Connect" placeholder row
-// (see buildConnectionsListAddOnlyTable) -- the NAME column's sub-lines
-// mirror NewAddConnectionGridCard's own subtitle verbatim ("Scan a QR code
-// or paste a link" / "to add a hardware or software agent") instead of just
-// repeating the title, since there's no real platform/status to show there
-// (the way a real row's newConnectionListNameCell shows under its name).
-// ACTIONS holds the same Scan QR / Paste Link shortcuts
+// (see buildConnectionsListAddOnlyTable) -- leads with the same "+" ring
+// control NewAddConnectionGridCard's own addControl uses (built by
+// newAddConnectionPlusControl, same OnAdd dialog). The NAME column's
+// sub-lines mirror NewAddConnectionGridCard's own subtitle verbatim ("Scan a
+// QR code or paste a link" / "to add a hardware or software agent") instead
+// of just repeating the title, since there's no real platform/status to
+// show there (the way a real row's newConnectionListNameCell shows under
+// its name). ACTIONS holds the same Scan QR / Paste Link shortcuts
 // NewAddConnectionGridCard's own buttons open, styled identically (same
 // addConnectionCardMutedColor/addConnectionCardHoverColor this package's
 // Grid add-tile already uses) just resized to a table row.
 func newConnectionListAddRow(actions AddConnectionCardActions, widths []float32) fyne.CanvasObject {
 	const addRowLabel = "Add New Connect"
+
+	addCell := container.NewCenter(newAddConnectionPlusControl(actions.OnAdd))
 
 	title := NewBrandText(addRowLabel, 11, design.ColorTextLight, true)
 	subtitleLine1 := canvas.NewText("Scan a QR code or paste a link", addConnectionCardMutedColor)
@@ -251,7 +257,7 @@ func newConnectionListAddRow(actions AddConnectionCardActions, widths []float32)
 
 	actionsCell := container.NewBorder(nil, nil, nil, container.New(&DeviceRowControlsLayout{Gap: 6}, qrBtn, pasteBtn))
 
-	return container.New(&connectionsTableRowLayout{Widths: widths, Gap: connectionListColumnGap}, nameCell, actionsCell)
+	return container.New(&connectionsTableRowLayout{Widths: widths, Gap: connectionListColumnGap}, addCell, nameCell, actionsCell)
 }
 
 func newConnectionListHeaderRow(labels []string, widths []float32) fyne.CanvasObject {

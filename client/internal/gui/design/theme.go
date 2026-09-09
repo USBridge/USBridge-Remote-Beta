@@ -105,6 +105,13 @@ const (
 	ColorNameCodeDefault fyne.ThemeColorName = "code-default"
 )
 
+// SizeNameToastText is the small text size the bottom "Connecting to X…"
+// toast uses for its message -- shared with its error state (see
+// view.ConnectingToastHandle.ShowError) so the error text reads at the same
+// small scale as the progress message it replaces, instead of jumping up to
+// the app's normal (much larger) body text size.
+const SizeNameToastText fyne.ThemeSizeName = "toast-text"
+
 // BrandTheme fixes the application to the current brand dark palette.
 // Until a separate light palette is defined, both theme variants use the same colors.
 type BrandTheme struct {
@@ -206,6 +213,8 @@ func (t *BrandTheme) Size(name fyne.ThemeSizeName) float32 {
 	switch name {
 	case fynetheme.SizeNameInputRadius, fynetheme.SizeNameSelectionRadius, fynetheme.SizeNameWindowButtonRadius:
 		return RadiusMD
+	case SizeNameToastText:
+		return 10
 	}
 	return t.fallback.Size(name)
 }

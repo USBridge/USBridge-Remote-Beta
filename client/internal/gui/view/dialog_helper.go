@@ -547,6 +547,13 @@ type ConnectingToastHandle struct {
 	body   *fyne.Container
 	border *canvas.Rectangle
 
+	// isError is read by ShowConnectingToast's PanelSize callback (via the
+	// forward-declared handle it closes over) to widen the panel's minimum
+	// width once ShowError has run -- an error message reads as several
+	// short, narrow lines otherwise, since the toast's default floor width
+	// is sized for the one-line "Connecting to X…" message.
+	isError bool
+
 	stopTicker chan struct{}
 	closeOnce  sync.Once
 }
@@ -568,11 +575,34 @@ func (h *ConnectingToastHandle) Close() {
 	})
 }
 
+// toastCopySizeTheme shrinks a button's icon and padding so the error
+// toast's copy-to-clipboard button reads as a small accessory next to the
+// (much smaller) error text -- not a full-size action button like the
+// close X, which keeps its normal size for consistency with every other
+// dialog's close button in this app.
+type toastCopySizeTheme struct {
+	fyne.Theme
+}
+
+func (t toastCopySizeTheme) Size(name fyne.ThemeSizeName) float32 {
+	switch name {
+	case theme.SizeNameInlineIcon:
+		return 13
+	case theme.SizeNamePadding:
+		return 2
+	case theme.SizeNameInnerPadding:
+		return 4
+	}
+	return t.Theme.Size(name)
+}
+
 // ShowError transforms the toast in place: stops the progress bar, swaps its
-// body for the (word-wrapped) error message, turns the border red, and adds
-// a top-right close (X) button plus a small copy-to-clipboard icon button.
-// Must be called from the Fyne goroutine -- every call site in this app
-// already runs inside fyne.Do. A no-op once the toast has been closed.
+// body for the (word-wrapped) error message -- set in design.SizeNameToastText,
+// the same small size the "Connecting to X…" message it replaces used --
+// turns the border red, and adds a top-right close (X) button plus a small
+// copy-to-clipboard icon button under the message. Must be called from the
+// Fyne goroutine -- every call site in this app already runs inside
+// fyne.Do. A no-op once the toast has been closed.
 func (h *ConnectingToastHandle) ShowError(message string) {
 	if h == nil || h.popup == nil {
 		return
@@ -582,13 +612,21 @@ func (h *ConnectingToastHandle) ShowError(message string) {
 		h.stopTicker = nil
 	}
 
+	h.isError = true
 	h.border.StrokeColor = design.ColorDanger
 	h.border.Refresh()
 
-	errLabel := widget.NewLabel(message)
+	errLabel := widget.NewRichText(&widget.TextSegment{
+		Text: message,
+		Style: widget.RichTextStyle{
+			ColorName: theme.ColorNameForeground,
+			SizeName:  design.SizeNameToastText,
+		},
+	})
 	errLabel.Wrapping = fyne.TextWrapWord
 
 	closeBtn := newConfirmDialogCloseButton(h.Close)
+	closeRow := container.NewHBox(layout.NewSpacer(), closeBtn)
 
 	copyBtn := widget.NewButtonWithIcon("", theme.ContentCopyIcon(), func() {
 		if h.parent != nil && h.parent.Clipboard() != nil {
@@ -596,16 +634,19 @@ func (h *ConnectingToastHandle) ShowError(message string) {
 		}
 	})
 	copyBtn.Importance = widget.LowImportance
+	copyRow := container.NewHBox(layout.NewSpacer(), container.NewThemeOverride(copyBtn, toastCopySizeTheme{Theme: design.NewBrandTheme()}))
 
 	h.body.Objects = []fyne.CanvasObject{
-		container.NewBorder(nil, nil, nil, closeBtn, errLabel),
-		container.NewHBox(layout.NewSpacer(), copyBtn),
+		closeRow,
+		NewInset(errLabel, 0, 0, 0, 6),
+		copyRow,
 	}
 	h.body.Refresh()
 	// Re-triggers the overlay's own layout pass so the panel resizes/repositions
-	// for the new (typically taller) content -- see Container.Refresh calling
-	// c.layout() unconditionally, which PopUp.Refresh cascades into via
-	// popUpRenderer.Refresh's r.popUp.Content.Refresh() call.
+	// for the new (typically taller and, now that isError is set, wider)
+	// content -- see Container.Refresh calling c.layout() unconditionally,
+	// which PopUp.Refresh cascades into via popUpRenderer.Refresh's
+	// r.popUp.Content.Refresh() call.
 	h.popup.Refresh()
 }
 
@@ -653,6 +694,11 @@ func ShowConnectingToast(message string, maxDuration time.Duration, parent fyne.
 		border,
 	)
 
+	// handle is assigned below, once popup exists -- PanelSize only actually
+	// runs on later layout passes (well after that assignment), so by the
+	// time it reads handle.isError the closure's reference is populated.
+	var handle *ConnectingToastHandle
+
 	popup := ShowOverlayPopup(parent, OverlayPopupSpec{
 		Panel:    panel,
 		DimColor: color.Transparent,
@@ -663,8 +709,21 @@ func ShowConnectingToast(message string, maxDuration time.Duration, parent fyne.
 				maxWidth = canvasSize.Width
 			}
 
+			// Error state gets a wider floor (and cap) so its message wraps
+			// into a few readable lines instead of many narrow ones -- the
+			// normal one-line "Connecting to X…" message stays at the
+			// original, narrower floor.
+			minFloorWidth := float32(240)
+			capWidth := maxWidth
+			if handle != nil && handle.isError {
+				minFloorWidth = 320
+				if capWidth > 420 {
+					capWidth = 420
+				}
+			}
+
 			panelMin := panel.MinSize()
-			panelWidth := minFloat32(maxFloat32(panelMin.Width, 240), maxWidth)
+			panelWidth := minFloat32(maxFloat32(panelMin.Width, minFloorWidth), capWidth)
 			return fyne.NewSize(panelWidth, panelMin.Height)
 		},
 		PanelPos: func(canvasSize fyne.Size, panelSize fyne.Size) fyne.Position {
@@ -673,7 +732,7 @@ func ShowConnectingToast(message string, maxDuration time.Duration, parent fyne.
 		},
 	})
 
-	handle := &ConnectingToastHandle{
+	handle = &ConnectingToastHandle{
 		popup:  popup,
 		parent: parent,
 		body:   body,

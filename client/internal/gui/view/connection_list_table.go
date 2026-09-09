@@ -193,22 +193,24 @@ func buildConnectionsListAddOnlyTable(actions AddConnectionCardActions) fyne.Can
 }
 
 // newConnectionListAddRow is List mode's "Add New Connect" placeholder row
-// (see buildConnectionsListAddOnlyTable) -- the NAME column's sub-line
-// mirrors NewAddConnectionGridCard's own subtitle ("Scan a QR code or paste
-// a link") instead of just repeating the title, since there's no real
-// platform/status to show there (the way a real row's
-// newConnectionListNameCell shows under its name). ACTIONS holds the same
-// Scan QR / Paste Link shortcuts NewAddConnectionGridCard's own buttons
-// open, styled identically (same addConnectionCardMutedColor/
-// addConnectionCardHoverColor this package's Grid add-tile already uses)
-// just resized to a table row.
+// (see buildConnectionsListAddOnlyTable) -- the NAME column's sub-lines
+// mirror NewAddConnectionGridCard's own subtitle verbatim ("Scan a QR code
+// or paste a link" / "to add a hardware or software agent") instead of just
+// repeating the title, since there's no real platform/status to show there
+// (the way a real row's newConnectionListNameCell shows under its name).
+// ACTIONS holds the same Scan QR / Paste Link shortcuts
+// NewAddConnectionGridCard's own buttons open, styled identically (same
+// addConnectionCardMutedColor/addConnectionCardHoverColor this package's
+// Grid add-tile already uses) just resized to a table row.
 func newConnectionListAddRow(actions AddConnectionCardActions, widths []float32) fyne.CanvasObject {
 	const addRowLabel = "Add New Connect"
-	const addRowSubtitle = "Scan a QR code or paste a link"
 
 	title := NewBrandText(addRowLabel, 11, design.ColorTextLight, true)
-	subtitle := canvas.NewText(addRowSubtitle, addConnectionCardMutedColor)
-	subtitle.TextSize = 9
+	subtitleLine1 := canvas.NewText("Scan a QR code or paste a link", addConnectionCardMutedColor)
+	subtitleLine2 := canvas.NewText("to add a hardware or software agent", addConnectionCardMutedColor)
+	subtitleLine1.TextSize = 9
+	subtitleLine2.TextSize = 9
+	subtitle := container.New(&tightStatsVBoxLayout{Gap: 0}, subtitleLine1, subtitleLine2)
 	nameCell := container.New(&tightStatsVBoxLayout{Gap: 2}, title, subtitle)
 
 	qrBtn := newIconChromeButton(iconChromeButtonSpec{

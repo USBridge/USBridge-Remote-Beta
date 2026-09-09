@@ -727,6 +727,13 @@ type StyledMenuOptions struct {
 	// own 36/32/24) when > 0 -- the default reads as too much top/bottom
 	// padding once TextSize shrinks a row's text down from the default 14.
 	RowHeight float32
+	// IgnoreAnchorWidth skips the "never narrower than anchor" step below --
+	// every other caller (dropdowns, the header's icon menus) wants the menu
+	// at least as wide as the control that opened it, but a text entry's own
+	// right-click menu (ShowEntryContextMenu) shouldn't stretch to match a
+	// wide field; it should size to its own longest row (Select All) like a
+	// normal context menu.
+	IgnoreAnchorWidth bool
 }
 
 func newDropdownPopup(content fyne.CanvasObject, canvas fyne.Canvas, size fyne.Size, onDismiss func()) *dropdownPopup {
@@ -845,7 +852,7 @@ func showStyledMenu(anchor fyne.CanvasObject, items []StyledMenuItem, options St
 			width = optionWidth
 		}
 	}
-	if anchor.Size().Width > width {
+	if !options.IgnoreAnchorWidth && anchor.Size().Width > width {
 		width = anchor.Size().Width
 	}
 	if options.Width > width {

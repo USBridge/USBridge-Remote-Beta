@@ -12,6 +12,8 @@ package view
 // dialog) should be one of these, not a plain widget.NewEntry().
 
 import (
+	"usbridge-client/internal/gui/design"
+
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/widget"
 )
@@ -74,13 +76,24 @@ func EntryContextMenuItems(entry *widget.Entry, typedShortcut func(fyne.Shortcut
 }
 
 // ShowEntryContextMenu opens EntryContextMenuItems(entry, typedShortcut) as
-// a ShowStyledMenu popup anchored to anchor (normally entry itself, or the
-// outer widget wrapping it) -- see StyledEntry.TappedSecondary and
-// controller's connectionDialogEntry, the two current callers.
+// a styled popup anchored to anchor (normally entry itself, or the outer
+// widget wrapping it) -- see StyledEntry.TappedSecondary and controller's
+// connectionDialogEntry, the two current callers. Same teal/10px look as
+// ShowStyledMenuTeal (the header's language menu, the per-connection
+// protocol dropdown's own popup) rather than default ShowStyledMenu's
+// 14px/light-text rows, and IgnoreAnchorWidth so it sizes to its own
+// longest row (Select All) instead of stretching to match a wide field --
+// unlike a dropdown, a text entry's context menu isn't picking a value for
+// that field, so there's no reason it should share its width.
 func ShowEntryContextMenu(entry *widget.Entry, anchor fyne.CanvasObject, typedShortcut func(fyne.Shortcut)) {
 	items := EntryContextMenuItems(entry, typedShortcut)
 	if len(items) == 0 {
 		return
 	}
-	ShowStyledMenu(anchor, items)
+	showStyledMenu(anchor, items, StyledMenuOptions{
+		TextColor:         design.ColorConnectionBadgeText,
+		TextSize:          10,
+		RowHeight:         26,
+		IgnoreAnchorWidth: true,
+	})
 }

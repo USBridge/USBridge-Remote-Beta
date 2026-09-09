@@ -270,7 +270,7 @@ func (mw *MainWindow) handleConnectionLost(err error, client *api.USBClient) {
 		mw.protocolSelect.Enable()
 		mw.updateStatus()
 		mw.showConnectionManager()
-		view.ShowErrorDialog(fmt.Errorf(i18n.Current.ConnectionLost, err), mw.window)
+		view.ShowConnectionErrorDialog(fmt.Errorf(i18n.Current.ConnectionLost, err), mw.window)
 	})
 
 	mw.connectionLossInProgress.Store(false)
@@ -861,7 +861,7 @@ func (mw *MainWindow) handleConnectFailure(message string, err error) {
 		if toast != nil {
 			toast.ShowError(fullErr.Error())
 		} else {
-			view.ShowErrorDialog(fullErr, mw.window)
+			view.ShowConnectionErrorDialog(fullErr, mw.window)
 		}
 	})
 }

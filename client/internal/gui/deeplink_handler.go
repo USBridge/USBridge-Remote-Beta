@@ -62,7 +62,7 @@ func (h *DeepLinkHandler) CheckAndHandleDeepLink(parent fyne.Window) {
 	internalHost, tailscaleHost, masterKey, protocol, immediate, err := h.parseDeepLink(uri)
 	if err != nil {
 		logrus.Errorf("❌ Failed to parse deep link: %v", err)
-		view.ShowErrorDialog(fmt.Errorf(i18n.Current.DeepLinkError, err), parent)
+		view.ShowConnectionErrorDialog(fmt.Errorf(i18n.Current.DeepLinkError, err), parent)
 		return
 	}
 

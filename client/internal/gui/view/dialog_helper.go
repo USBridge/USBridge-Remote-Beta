@@ -826,6 +826,100 @@ func ShowConnectingToast(message string, maxDuration time.Duration, parent fyne.
 	return handle
 }
 
+// ShowConnectionErrorDialog is a modal, centered, dimmed-background sibling
+// of ConnectingToastHandle.ShowError -- same visual language (red border,
+// small left-aligned "Error" title sharing a header row with copy/close
+// buttons, small wrapped message text) but for connection errors that have
+// no live connecting toast to transform in place: a deep link that fails to
+// even parse (no connect attempt ever started), or an established
+// connection dropping mid-session (the user isn't watching a "connecting…"
+// toast when that happens). Everything else in this app's non-connection
+// errors still goes through the plain ShowErrorDialog below.
+func ShowConnectionErrorDialog(err error, parent fyne.Window) {
+	if err == nil {
+		return
+	}
+	message := err.Error()
+
+	var popup *widget.PopUp
+	closePopup := func() {
+		if popup != nil {
+			popup.Hide()
+		}
+	}
+
+	errLabel := widget.NewRichText(&widget.TextSegment{
+		Text: message,
+		Style: widget.RichTextStyle{
+			ColorName: theme.ColorNameForeground,
+			SizeName:  design.SizeNameToastText,
+		},
+	})
+	errLabel.Wrapping = fyne.TextWrapWord
+
+	copyBtn := newToastCopyButton(func() {
+		if parent != nil && parent.Clipboard() != nil {
+			parent.Clipboard().SetContent(message)
+		}
+	})
+	titleText := NewBrandText(i18n.Current.Error, 10, design.ColorDanger, true)
+	buttonsRow := container.NewHBox(copyBtn, newToastCloseButton(closePopup))
+	headerRow := container.NewBorder(nil, nil, titleText, buttonsRow)
+
+	body := container.NewVBox(
+		headerRow,
+		container.NewThemeOverride(errLabel, toastTextPaddingTheme{Theme: design.NewBrandTheme()}),
+	)
+
+	panelContent := fyne.CanvasObject(body)
+	if parent != nil {
+		var minW float32 = 360
+		canvasSize := parent.Canvas().Size()
+		if UseCompactLayout(canvasSize.Width) {
+			minW = canvasSize.Width * 0.85
+			if minW < 280 {
+				minW = 280
+			}
+		}
+		panelContent = container.New(&minWidthLayout{minWidth: minW}, body)
+	}
+
+	bg := canvas.NewRectangle(design.ColorGray900)
+	bg.CornerRadius = confirmToastRadius
+
+	border := canvas.NewRectangle(color.Transparent)
+	border.CornerRadius = confirmToastRadius
+	border.StrokeColor = design.ColorDanger
+	border.StrokeWidth = 1
+
+	panel := container.NewStack(
+		bg,
+		NewInset(panelContent, 9, 9, 4, 4),
+		border,
+	)
+
+	popup = ShowOverlayPopup(parent, OverlayPopupSpec{
+		Panel:    panel,
+		DimColor: color.NRGBA{R: 0x00, G: 0x00, B: 0x00, A: 0x72},
+		PanelSize: func(canvasSize fyne.Size, panel fyne.CanvasObject) fyne.Size {
+			margin := clampFloat32(minFloat32(canvasSize.Width, canvasSize.Height)*0.04, 20, 28)
+			maxWidth := canvasSize.Width - margin*2
+			maxHeight := canvasSize.Height - margin*2
+			if maxWidth <= 0 {
+				maxWidth = canvasSize.Width
+			}
+			if maxHeight <= 0 {
+				maxHeight = canvasSize.Height
+			}
+
+			panelMin := panel.MinSize()
+			panelWidth := minFloat32(maxFloat32(panelMin.Width, 320), minFloat32(maxWidth, 420))
+			panelHeight := minFloat32(panelMin.Height, maxHeight)
+			return fyne.NewSize(panelWidth, panelHeight)
+		},
+	})
+}
+
 func ShowErrorDialog(err error, parent fyne.Window) {
 	if err == nil {
 		return

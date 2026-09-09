@@ -102,7 +102,7 @@ func (mw *MainWindow) setConnectionLoading(loading bool) {
 // bar reaching 100% doesn't close the toast (handleConnectingStateChange
 // only closes it once the real attempt resolves) -- it just gives a sense
 // of pace for a typical attempt without pretending to know the real one.
-const connectingToastBarDuration = 7 * time.Second
+const connectingToastBarDuration = 15 * time.Second
 
 // handleConnectingStateChange is ConnectionManager's connectingStateSink --
 // wired up once in createConnectionAddressBar (main_window_layout.go),

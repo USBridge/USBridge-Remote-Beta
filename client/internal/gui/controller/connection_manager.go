@@ -503,7 +503,22 @@ func (cm *ConnectionManager) SetConnectionPending(pending bool) {
 	if cm == nil {
 		return
 	}
-	cm.connectionPending = pending
+	// Deliberately NOT cm.connectionPending = pending here -- that's
+	// setConnectionPendingState's own job, and doing it here first used to
+	// make its wasPending := cm.connectionPending capture read the value
+	// this call had already written, so pending != wasPending could never
+	// be true for a call routed through this method. That's the only one
+	// of setConnectionPendingState's two OR'd trigger conditions
+	// (pending != wasPending || activeIndex != wasActiveIndex) a *closing*
+	// transition can ever satisfy on its own -- clearConnectionPending's
+	// SetConnectionPending(false) always goes through here, so the
+	// connectingStateSink (the connecting toast's close signal) silently
+	// never fired on its own for a successful connect. It only appeared to
+	// work before by accident, riding the OTHER half of that OR condition
+	// via a since-fixed bug that corrupted activeIndex to -1 on every
+	// connect (see HandleFormEdited/SetFormTextSilently) -- once that bug
+	// stopped moving activeIndex around, this one was fully exposed: the
+	// toast stopped closing at all once a session actually connected.
 	activeIndex := cm.selectedIndex
 	if cm.selectedIndex < 0 || cm.selectedIndex >= len(cm.connections) {
 		activeIndex = -1

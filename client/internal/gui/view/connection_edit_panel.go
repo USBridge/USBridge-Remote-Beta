@@ -27,7 +27,6 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
-	"fyne.io/fyne/v2/widget"
 )
 
 // ConnectionEditPanelData is what the panel needs to prefill its fields.
@@ -55,7 +54,7 @@ type ConnectionEditPanelActions struct {
 func NewConnectionEditPanel(data ConnectionEditPanelData, actions ConnectionEditPanelActions) fyne.CanvasObject {
 	statusIndicator := newConnectionEditPanelStatusIndicator(data.RemoteOS)
 
-	nameEntry := widget.NewEntry()
+	nameEntry := NewStyledEntry()
 	nameEntry.SetPlaceHolder("Name")
 	nameEntry.SetText(strings.TrimSpace(data.Name))
 	nameEntry.TextStyle = fyne.TextStyle{Bold: true}

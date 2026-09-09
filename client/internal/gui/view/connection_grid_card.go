@@ -113,9 +113,9 @@ func NewConnectionGridCard(data ConnectionCardData, state ConnectionRowState, ac
 
 	var topRow fyne.CanvasObject
 	var editBtn *iconChromeButton
-	var nameEntry *widget.Entry
+	var nameEntry *StyledEntry
 	if editing {
-		nameEntry = widget.NewEntry()
+		nameEntry = NewStyledEntry()
 		nameEntry.SetPlaceHolder("Name")
 		nameEntry.SetText(strings.TrimSpace(data.Name))
 		nameEntry.TextStyle = fyne.TextStyle{Bold: true}
@@ -169,7 +169,7 @@ func NewConnectionGridCard(data ConnectionCardData, state ConnectionRowState, ac
 	}
 
 	var statsBox fyne.CanvasObject
-	var lanEntry, tailscaleEntry, tokenEntry *widget.Entry
+	var lanEntry, tailscaleEntry, tokenEntry *StyledEntry
 	if editing {
 		statsBox, _, lanEntry, tailscaleEntry, tokenEntry = NewConnectionCardEditableStatsBox(false, "", data.LANAddress, data.TailscaleAddress, data.MasterKey, 160)
 	} else {
@@ -575,7 +575,7 @@ func (t *gridCardFieldTheme) Size(name fyne.ThemeSizeName) float32 {
 // wrapGridCardEntry applies gridCardFieldTheme to entry via a ThemeOverride,
 // same trick controller.noInputBgTheme uses for the modal editor's fields,
 // just local to this package (view can't import controller).
-func wrapGridCardEntry(entry *widget.Entry, textSize float32, textColor color.Color) fyne.CanvasObject {
+func wrapGridCardEntry(entry *StyledEntry, textSize float32, textColor color.Color) fyne.CanvasObject {
 	return container.NewThemeOverride(entry, &gridCardFieldTheme{Theme: design.NewBrandTheme(), textSize: textSize, textColor: textColor})
 }
 
@@ -598,7 +598,7 @@ func wrapGridCardEntry(entry *widget.Entry, textSize float32, textColor color.Co
 //     separate Name row above this box entirely (their own topRow, a
 //     different look), so both pass includeName=false and get a nil
 //     nameEntry back, same as if this parameter didn't exist for them.
-func NewConnectionCardEditableStatsBox(includeName bool, name, lanAddress, tailscaleAddress, masterKey string, entryWidth float32) (box fyne.CanvasObject, nameEntry, lanEntry, tailscaleEntry, tokenEntry *widget.Entry) {
+func NewConnectionCardEditableStatsBox(includeName bool, name, lanAddress, tailscaleAddress, masterKey string, entryWidth float32) (box fyne.CanvasObject, nameEntry, lanEntry, tailscaleEntry, tokenEntry *StyledEntry) {
 	lanEntry = newConnectionCardFieldEntry(lanAddress, "LAN address")
 	tailscaleEntry = newConnectionCardFieldEntry(tailscaleAddress, "Tailscale address")
 	tokenEntry = newConnectionCardFieldEntry(masterKey, "Token")
@@ -636,8 +636,8 @@ func NewConnectionCardEditableStatsBox(includeName bool, name, lanAddress, tails
 	return box, nameEntry, lanEntry, tailscaleEntry, tokenEntry
 }
 
-func newConnectionCardFieldEntry(value, placeholder string) *widget.Entry {
-	entry := widget.NewEntry()
+func newConnectionCardFieldEntry(value, placeholder string) *StyledEntry {
+	entry := NewStyledEntry()
 	entry.SetPlaceHolder(placeholder)
 	entry.SetText(strings.TrimSpace(value))
 	return entry
@@ -753,7 +753,7 @@ func (l *fixedWidthLabelLayout) Layout(objects []fyne.CanvasObject, size fyne.Si
 	child.Resize(childMin)
 }
 
-func newConnectionStatEditRow(label string, entry *widget.Entry, textSize float32, textColor color.Color, stackedActions bool, width float32, showActions bool) fyne.CanvasObject {
+func newConnectionStatEditRow(label string, entry *StyledEntry, textSize float32, textColor color.Color, stackedActions bool, width float32, showActions bool) fyne.CanvasObject {
 	c5c8b5Color := color.NRGBA{R: 0xc5, G: 0xc8, B: 0xb5, A: 0xff}
 	labelText := canvas.NewText(label, c5c8b5Color)
 	labelText.TextSize = 10
@@ -769,7 +769,7 @@ func newConnectionStatEditRow(label string, entry *widget.Entry, textSize float3
 	// rather than nil -- see that constant's doc comment.
 	var actionsCol fyne.CanvasObject
 	if showActions {
-		actionsCol = container.NewCenter(newGridCardFieldActions(entry))
+		actionsCol = container.NewCenter(newGridCardFieldActions(&entry.Entry))
 	} else {
 		spacer := canvas.NewRectangle(color.Transparent)
 		spacer.SetMinSize(fyne.NewSize(connectionStatEditRowActionsWidth, 1))

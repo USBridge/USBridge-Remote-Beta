@@ -210,6 +210,19 @@ func (e *connectionDialogEntry) SetText(text string) {
 	}
 }
 
+// TappedSecondary opens the same styled Cut/Copy/Paste/Select All menu
+// StyledEntry uses (view.ShowEntryContextMenu) instead of Fyne's own
+// unstyled popup -- this dialog's paste-link box is the one entry left in
+// this package that isn't a view.StyledEntry (it needs the extra
+// FocusGained/FocusLost/OnChanged wiring above, which StyledEntry doesn't
+// have), so it wires the same menu in directly rather than going without.
+func (e *connectionDialogEntry) TappedSecondary(*fyne.PointEvent) {
+	if c := fyne.CurrentApp().Driver().CanvasForObject(e); c != nil {
+		c.Focus(e)
+	}
+	view.ShowEntryContextMenu(&e.Entry, e, e.TypedShortcut)
+}
+
 func newConnectionDialogLabel(text string) fyne.CanvasObject {
 	label := canvas.NewText(text, design.ColorTextMuted)
 	label.TextSize = 12

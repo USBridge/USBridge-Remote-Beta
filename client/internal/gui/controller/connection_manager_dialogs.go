@@ -1750,12 +1750,15 @@ func (cm *ConnectionManager) showEditDialog(idx int) {
 	})
 }
 
+// showAddDialog is the "+" button's own entry point (both the header's Add
+// button and every Grid/List add tile's OnAdd) -- always opens blank. It
+// used to prefill from cm.hostEntry/cm.masterKeyEntry, the active
+// connection's own host/master-key fields (see applyConnectionToForm) --
+// those still hold whatever was last connected, so reopening Add Connection
+// after connecting once kept echoing that connection's LAN/token back
+// instead of giving a clean form for the next one.
 func (cm *ConnectionManager) showAddDialog() {
-	internalHost, tailscaleHost := splitHostByType(cm.hostEntry.Text)
-	if selected := normalizeConnectionProtocol(cm.protocolSelect.Selected); selected == models.ConnectionProtocolTailscale {
-		internalHost, tailscaleHost = "", strings.TrimSpace(cm.hostEntry.Text)
-	}
-	cm.showPrefilledAddDialog("", internalHost, tailscaleHost, cm.masterKeyEntry.Text, "", false, false)
+	cm.showPrefilledAddDialog("", "", "", "", "", false, false)
 }
 
 func (cm *ConnectionManager) showPrefilledAddDialog(name, internalHost, tailscaleHost, masterKey, protocol string, scanned, startWithPasteLink bool) {

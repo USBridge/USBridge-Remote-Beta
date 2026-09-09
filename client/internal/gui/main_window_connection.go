@@ -32,12 +32,28 @@ func (mw *MainWindow) handleConnectionFromDeepLink(host, masterKey, protocol str
 // handleConnectionFromManager handles connection from the manager (arrow on the card).
 // masterKey is the API secret (from QR sync).
 func (mw *MainWindow) handleConnectionFromManager(host, masterKey, protocol string, tailscaleRegister bool) {
-	mw.hostEntry.SetText(host)
-	mw.tokenEntry.SetText(masterKey)
-	mw.pendingTailscaleRegister = tailscaleRegister
-	if protocol != "" {
-		mw.protocolSelect.SetSelected(protocol)
+	setForm := func() {
+		mw.hostEntry.SetText(host)
+		mw.tokenEntry.SetText(masterKey)
+		if protocol != "" {
+			mw.protocolSelect.SetSelected(protocol)
+		}
 	}
+	// Silently, via connectionManager -- for the OnUse (Grid/List card)
+	// caller, cm.SelectConnection(idx) already just populated these same
+	// entries under its own syncingForm guard; setting them again here
+	// unguarded fires OnChanged -> HandleFormEdited, which (before this fix)
+	// compared against a value the form was never actually populated with
+	// and wrongly cleared cm.selectedIndex mid-connect -- see
+	// HandleFormEdited's and SetFormTextSilently's doc comments for the
+	// full chain (it also desyncs SetConnectionPending's redundant-call
+	// activeIndex, which is what made the toast/button flicker).
+	if mw.connectionManager != nil {
+		mw.connectionManager.SetFormTextSilently(setForm)
+	} else {
+		setForm()
+	}
+	mw.pendingTailscaleRegister = tailscaleRegister
 	mw.handleConnectionToggle()
 }
 

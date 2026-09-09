@@ -446,7 +446,16 @@ func (cm *ConnectionManager) HandleFormEdited(host, masterKey, protocol string) 
 	protocol = normalizeConnectionProtocol(protocol)
 
 	current := cm.connections[cm.selectedIndex]
-	if strings.TrimSpace(current.Host) == host &&
+	// Compares against the SAME resolveHostForProtocol value
+	// applyConnectionToForm used to populate the form in the first place
+	// (not current.Host, the legacy pre-split field) -- comparing against
+	// current.Host false-positived as "edited" for any connection whose
+	// legacy Host string doesn't happen to match its InternalHost/
+	// TailscaleHost split (e.g. one merged in from an account sync), wrongly
+	// clearing the selection out from under an in-flight connect attempt
+	// (see beginConnectionFromRow/SetConnectionPending's activeIndex mixup).
+	expectedHost := cm.resolveHostForProtocol(current, protocol)
+	if strings.TrimSpace(expectedHost) == host &&
 		strings.TrimSpace(current.MasterKey) == masterKey &&
 		normalizeConnectionProtocol(current.Protocol) == protocol {
 		return false
@@ -454,6 +463,25 @@ func (cm *ConnectionManager) HandleFormEdited(host, masterKey, protocol string) 
 
 	cm.selectedIndex = -1
 	return true
+}
+
+// SetFormTextSilently runs fn (expected to SetText the host/master-key
+// entries) under the same syncingForm guard applyConnectionToForm uses --
+// so the resulting OnChanged callbacks don't reach HandleFormEdited and
+// misread a programmatic value push (not a real user edit) as the user
+// having typed something different, which would otherwise clear
+// selectedIndex out from under whatever SelectConnection just set it to.
+// Used by gui.MainWindow.handleConnectionFromManager, which redundantly
+// re-sets the same entries SelectConnection just populated (needed for its
+// other caller, a deep link, which has no prior SelectConnection call).
+func (cm *ConnectionManager) SetFormTextSilently(fn func()) {
+	if cm == nil {
+		fn()
+		return
+	}
+	cm.syncingForm = true
+	defer func() { cm.syncingForm = false }()
+	fn()
 }
 
 func (cm *ConnectionManager) ClearSelection() {

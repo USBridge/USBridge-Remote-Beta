@@ -575,25 +575,63 @@ func (h *ConnectingToastHandle) Close() {
 	})
 }
 
-// toastCopySizeTheme shrinks a button's icon and padding so the error
-// toast's copy-to-clipboard button reads as a small accessory next to the
-// (much smaller) error text -- not a full-size action button like the
-// close X, which keeps its normal size for consistency with every other
-// dialog's close button in this app.
-type toastCopySizeTheme struct {
-	fyne.Theme
+// toastCloseIconColor/toastCloseIconHoverColor are the error toast's close
+// (X) glyph tint -- deliberately chromeless (see newToastCloseButton's
+// NormalFill/HoverFill: color.Transparent) so only the glyph itself, not a
+// button-shaped surface behind it, marks the tap target.
+const toastCloseIconColor = "#696d62"
+const toastCloseIconHoverColor = "#8f9289"
+
+// toastCopyIconColor is the error toast's copy-to-clipboard glyph tint.
+const toastCopyIconColor = "#ebffbc"
+
+// materialCloseIconPath is the Material Design "close" glyph.
+const materialCloseIconPath = `M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z`
+
+// materialCopyIconPath is the Material Design "content copy" glyph -- same
+// path as accountDialogCopyIconRes/gridCardFieldActions' copy icon
+// elsewhere in this app, just tinted for this toast.
+const materialCopyIconPath = `M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z`
+
+func newToastSVGResource(name, hexColor, path string) fyne.Resource {
+	return fyne.NewStaticResource(name, []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="`+hexColor+`"><path d="`+path+`"/></svg>`))
 }
 
-func (t toastCopySizeTheme) Size(name fyne.ThemeSizeName) float32 {
-	switch name {
-	case theme.SizeNameInlineIcon:
-		return 13
-	case theme.SizeNamePadding:
-		return 2
-	case theme.SizeNameInnerPadding:
-		return 4
-	}
-	return t.Theme.Size(name)
+// newToastCloseButton is the error toast's own close (X) button -- smaller
+// and chromeless (no resting or hover background) compared to
+// newConfirmDialogCloseButton's full-size widget.Button used by every other
+// dialog in this app, since this toast is a small non-modal card rather
+// than a full modal dialog.
+func newToastCloseButton(onTapped func()) fyne.CanvasObject {
+	normalIcon := newToastSVGResource("toast-close.svg", toastCloseIconColor, materialCloseIconPath)
+	hoverIcon := newToastSVGResource("toast-close-hover.svg", toastCloseIconHoverColor, materialCloseIconPath)
+	return newIconChromeButton(iconChromeButtonSpec{
+		NormalFill: color.Transparent,
+		HoverFill:  color.Transparent,
+		Stroke:     color.Transparent,
+		NormalIcon: normalIcon,
+		HoverIcon:  hoverIcon,
+		IconSize:   fyne.NewSize(11, 11),
+		ButtonSize: fyne.NewSize(20, 20),
+		OnTapped:   onTapped,
+	})
+}
+
+// newToastCopyButton is the error toast's copy-to-clipboard button: a small
+// square with a soft (not the app's usual design.RadiusMD, which reads as a
+// circle at this size) rounded corner, transparent until hovered.
+func newToastCopyButton(onTapped func()) fyne.CanvasObject {
+	icon := newToastSVGResource("toast-copy.svg", toastCopyIconColor, materialCopyIconPath)
+	return newIconChromeButton(iconChromeButtonSpec{
+		NormalFill:   color.Transparent,
+		HoverFill:    design.ColorSurfaceLight,
+		Stroke:       color.Transparent,
+		CornerRadius: 3,
+		NormalIcon:   icon,
+		IconSize:     fyne.NewSize(10, 10),
+		ButtonSize:   fyne.NewSize(18, 18),
+		OnTapped:     onTapped,
+	})
 }
 
 // ShowError transforms the toast in place: stops the progress bar, swaps its
@@ -625,20 +663,16 @@ func (h *ConnectingToastHandle) ShowError(message string) {
 	})
 	errLabel.Wrapping = fyne.TextWrapWord
 
-	closeBtn := newConfirmDialogCloseButton(h.Close)
-	closeRow := container.NewHBox(layout.NewSpacer(), closeBtn)
-
-	copyBtn := widget.NewButtonWithIcon("", theme.ContentCopyIcon(), func() {
+	closeRow := container.NewHBox(layout.NewSpacer(), newToastCloseButton(h.Close))
+	copyRow := container.NewHBox(layout.NewSpacer(), newToastCopyButton(func() {
 		if h.parent != nil && h.parent.Clipboard() != nil {
 			h.parent.Clipboard().SetContent(message)
 		}
-	})
-	copyBtn.Importance = widget.LowImportance
-	copyRow := container.NewHBox(layout.NewSpacer(), container.NewThemeOverride(copyBtn, toastCopySizeTheme{Theme: design.NewBrandTheme()}))
+	}))
 
 	h.body.Objects = []fyne.CanvasObject{
 		closeRow,
-		NewInset(errLabel, 0, 0, 0, 6),
+		errLabel,
 		copyRow,
 	}
 	h.body.Refresh()
@@ -676,7 +710,7 @@ func ShowConnectingToast(message string, maxDuration time.Duration, parent fyne.
 	bar := newConnectingProgressBar()
 
 	body := container.NewVBox(
-		NewInset(text, 0, 0, 8, 8),
+		NewInset(text, 0, 0, 2, 4),
 		bar,
 	)
 

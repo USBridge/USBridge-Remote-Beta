@@ -517,6 +517,9 @@ type dropdownItem struct {
 	textColor      color.Color
 	textSize       float32
 	monospace      bool
+	// minHeight overrides MinSize's own 36/32/24 row height when > 0 -- see
+	// StyledMenuOptions.RowHeight.
+	minHeight float32
 }
 
 func newDropdownItem(text, secondary string, selected bool, onTap func()) *dropdownItem {
@@ -588,6 +591,9 @@ func (i *dropdownItem) MinSize() fyne.Size {
 
 	if width < minWidth {
 		width = minWidth
+	}
+	if i.minHeight > 0 {
+		height = i.minHeight
 	}
 	return fyne.NewSize(width, height)
 }
@@ -717,6 +723,10 @@ type StyledMenuOptions struct {
 	// ShowStyledMenu caller's look along with it.
 	TextColor color.Color
 	TextSize  float32
+	// RowHeight overrides each row's default height (dropdownItem.MinSize's
+	// own 36/32/24) when > 0 -- the default reads as too much top/bottom
+	// padding once TextSize shrinks a row's text down from the default 14.
+	RowHeight float32
 }
 
 func newDropdownPopup(content fyne.CanvasObject, canvas fyne.Canvas, size fyne.Size, onDismiss func()) *dropdownPopup {
@@ -755,6 +765,10 @@ func ShowStyledMenuTeal(anchor fyne.CanvasObject, items []StyledMenuItem) {
 	showStyledMenu(anchor, items, StyledMenuOptions{
 		TextColor: design.ColorConnectionBadgeText,
 		TextSize:  10,
+		// Default row height (36) was tuned for the default 14px text --
+		// trimmed by ~5px top/bottom (to 26) to match this menu's smaller
+		// 10px text instead of leaving it looking over-padded.
+		RowHeight: 26,
 	})
 }
 
@@ -788,6 +802,9 @@ func showStyledMenu(anchor fyne.CanvasObject, items []StyledMenuItem, options St
 		}
 		if options.TextSize > 0 {
 			row.textSize = options.TextSize
+		}
+		if options.RowHeight > 0 {
+			row.minHeight = options.RowHeight
 		}
 		rows = append(rows, row)
 		rowCallbacks = append(rowCallbacks, onTap)

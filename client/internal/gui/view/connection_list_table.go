@@ -193,18 +193,21 @@ func buildConnectionsListAddOnlyTable(actions AddConnectionCardActions) fyne.Can
 }
 
 // newConnectionListAddRow is List mode's "Add New Connect" placeholder row
-// (see buildConnectionsListAddOnlyTable) -- the NAME column repeats the
-// title as its own sub-line (there's no real platform/status to show, the
-// way a real row's newConnectionListNameCell shows under its name), and
-// ACTIONS holds the same Scan QR / Paste Link shortcuts
-// NewAddConnectionGridCard's own buttons open, styled identically (same
-// addConnectionCardMutedColor/addConnectionCardHoverColor this package's
-// Grid add-tile already uses) just resized to a table row.
+// (see buildConnectionsListAddOnlyTable) -- the NAME column's sub-line
+// mirrors NewAddConnectionGridCard's own subtitle ("Scan a QR code or paste
+// a link") instead of just repeating the title, since there's no real
+// platform/status to show there (the way a real row's
+// newConnectionListNameCell shows under its name). ACTIONS holds the same
+// Scan QR / Paste Link shortcuts NewAddConnectionGridCard's own buttons
+// open, styled identically (same addConnectionCardMutedColor/
+// addConnectionCardHoverColor this package's Grid add-tile already uses)
+// just resized to a table row.
 func newConnectionListAddRow(actions AddConnectionCardActions, widths []float32) fyne.CanvasObject {
 	const addRowLabel = "Add New Connect"
+	const addRowSubtitle = "Scan a QR code or paste a link"
 
 	title := NewBrandText(addRowLabel, 11, design.ColorTextLight, true)
-	subtitle := canvas.NewText(addRowLabel, addConnectionCardMutedColor)
+	subtitle := canvas.NewText(addRowSubtitle, addConnectionCardMutedColor)
 	subtitle.TextSize = 9
 	nameCell := container.New(&tightStatsVBoxLayout{Gap: 2}, title, subtitle)
 

@@ -108,6 +108,14 @@ type ConfigStore interface {
 type CodecProbe interface {
 	CurrentVideoCodec() string
 	SupportedVideoCodecs(adminPort int) []string
+	// Color444Status reports the RustShine Pro color upgrade's state:
+	// active is whether the current/most recent session actually negotiated
+	// 4:4:4 chroma; available is whether this host could offer it right now
+	// (hardware probe AND license tier -- see gamestream-server's
+	// GameStreamConfig::color444_supported/AppState::color444_licensed
+	// docs). Always (false, false) on a backend with no such concept
+	// (Sunshine).
+	Color444Status() (active bool, available bool)
 }
 
 // Client is a Moonlight client paired with the streaming host.

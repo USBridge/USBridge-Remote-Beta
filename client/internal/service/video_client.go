@@ -52,6 +52,12 @@ type VideoClient interface {
 	SetExpectedVideoSize(width, height int)
 	SetFPS(fps int)
 	SetBitrate(kbps int)
+	// SetColor444 requests RustShine Pro 4:4:4 chroma for the next
+	// ConnectToMoonlight -- see models.VideoStartRequest.Color444's doc
+	// comment for why this is a pure client-side hint (moonlight-common-c's
+	// own ANNOUNCE negotiation), not something sent to the agent's REST
+	// API. Only takes effect for VideoModeH265; a no-op otherwise.
+	SetColor444(enabled bool)
 
 	// NegotiatedVideoCodecName returns the codec the server actually
 	// negotiated for the current session (from moonlight-common-c's

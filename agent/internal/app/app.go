@@ -2670,6 +2670,16 @@ func (a *App) SupportedVideoCodecs() []string {
 	return a.stream.SupportedVideoCodecs(port)
 }
 
+// Color444Status reports the RustShine Pro color upgrade's state -- see
+// Application interface's doc comment. (false, false) with no active
+// backend, matching CurrentVideoCodec's own "nothing to report yet" default.
+func (a *App) Color444Status() (active bool, available bool) {
+	if a.stream == nil {
+		return false, false
+	}
+	return a.stream.Color444Status()
+}
+
 // UnpairSunshineClient removes the Moonlight client with the given UUID from
 // Sunshine's authorized client list.
 func (a *App) UnpairSunshineClient(uniqueID string) error {

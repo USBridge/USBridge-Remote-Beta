@@ -308,6 +308,11 @@ func (c *WebRTCVideoClient) SetExpectedVideoSize(width, height int) {}
 func (c *WebRTCVideoClient) SetFPS(fps int)                         {}
 func (c *WebRTCVideoClient) SetBitrate(kbps int)                    {}
 
+// SetColor444: the RustShine Pro color upgrade is HEVC/VAAPI-specific
+// (moonlight-common-c ANNOUNCE negotiation) -- no WebRTC equivalent, same
+// reasoning as SetVideoMode above.
+func (c *WebRTCVideoClient) SetColor444(enabled bool) {}
+
 // NegotiatedVideoCodecName: the browser's RTCPeerConnection negotiates
 // this internally (via the SDP answer's codec preference order); exposing
 // which one it actually picked would need reading back

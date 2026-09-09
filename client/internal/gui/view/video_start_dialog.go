@@ -54,6 +54,15 @@ type VideoStartDialog struct {
 	vsyncCheck        *widget.Check
 	aiVisionCheck     *widget.Check
 	aiVisionHint      *widget.Label
+	// color444Check/color444Hint: the RustShine Pro 4:4:4 color upgrade,
+	// placed right below the resolution picker and above the AI Vision
+	// checkbox. Only shown when the currently selected codec is H.265 AND
+	// the agent's own video-info response says color444Available (hardware
+	// probe AND license tier, see models.VideoStatus.Color444Available's
+	// doc comment) -- see refreshModeUI.
+	color444Check     *widget.Check
+	color444Hint      *widget.Label
+	color444Available bool
 
 	startBtn  *widget.Button
 	cancelBtn *widget.Button
@@ -550,6 +559,18 @@ func (vsd *VideoStartDialog) createInterface() {
 	vsd.aiVisionHint.Wrapping = fyne.TextWrapWord
 	vsd.aiVisionHint.TextStyle = fyne.TextStyle{Italic: true}
 
+	// RustShine Pro 4:4:4 color: off by default, takes effect on the next
+	// Start (unlike AI Vision, this is a real renegotiation with the
+	// server, not a pure local overlay) -- see models.VideoStartRequest.Color444's
+	// doc comment. Visibility/enabled state is entirely driven by
+	// refreshModeUI (codec == H.265 and the agent currently offers it).
+	vsd.color444Check = widget.NewCheck(i18n.Current.Color444, nil)
+	vsd.color444Hint = widget.NewLabel("")
+	vsd.color444Hint.Wrapping = fyne.TextWrapWord
+	vsd.color444Hint.TextStyle = fyne.TextStyle{Italic: true}
+	vsd.color444Check.Hide()
+	vsd.color444Hint.Hide()
+
 	vsd.startBtn = widget.NewButton(i18n.Current.StartVideo, vsd.handleStart)
 	vsd.startBtn.Importance = widget.HighImportance
 	vsd.cancelBtn = widget.NewButton(i18n.Current.Cancel, vsd.handleCancel)
@@ -602,6 +623,8 @@ func (vsd *VideoStartDialog) createInterface() {
 		),
 		vsd.modeDetailsSlot,
 		vsd.vsyncCheck,
+		vsd.color444Check,
+		vsd.color444Hint,
 		vsd.aiVisionCheck,
 		vsd.aiVisionHint,
 	)
@@ -649,6 +672,10 @@ func (vsd *VideoStartDialog) Configure(info *models.VideoInfoData, defaultWidth,
 	vsd.captureModes = nil
 	vsd.resolutionLabels = make(map[string]models.VideoCaptureMode)
 	vsd.resolutionHints = make(map[string]string)
+	vsd.color444Available = info != nil && info.Color444Available
+	if !vsd.color444Available {
+		vsd.color444Check.SetChecked(false)
+	}
 
 	// Only Moonlight-compatible encodings are supported; filter out legacy JPEG/RAW modes
 	// that older server versions may still advertise.
@@ -916,6 +943,28 @@ func (vsd *VideoStartDialog) refreshModeUI() {
 		vsd.modeDetailsSlot.Objects = []fyne.CanvasObject{vsd.modeDetailsSlot.Objects[0], vsd.bitrateBlock}
 	}
 	vsd.modeDetailsSlot.Refresh()
+
+	// RustShine Pro 4:4:4 color: only meaningful for H.265 (this project's
+	// hardware encode path has no H.264/AV1 4:4:4 profile, see
+	// service.moonlightVideoFormat's doc comment) -- hidden entirely for
+	// every other codec rather than shown-disabled, since it's not a
+	// choice that could ever apply there.
+	if modeID == models.VideoModeH265 {
+		vsd.color444Check.Show()
+		vsd.color444Check.Enable()
+		if vsd.color444Available {
+			vsd.color444Hint.SetText(i18n.Current.Color444Hint)
+		} else {
+			vsd.color444Check.SetChecked(false)
+			vsd.color444Check.Disable()
+			vsd.color444Hint.SetText(i18n.Current.Color444UnavailableHint)
+		}
+		vsd.color444Hint.Show()
+	} else {
+		vsd.color444Check.SetChecked(false)
+		vsd.color444Check.Hide()
+		vsd.color444Hint.Hide()
+	}
 }
 
 func localizedVideoModeDescription(modeID string) string {
@@ -1111,6 +1160,7 @@ func (vsd *VideoStartDialog) handleStart() {
 		VideoMode:          vsd.selectedModeID(),
 		CapturePixelFormat: selectedMode.PixelFormat,
 		EnableVSync:        vsd.vsyncCheck.Checked,
+		Color444:           vsd.selectedModeID() == models.VideoModeH265 && vsd.color444Check.Checked,
 	}
 
 	logrus.Infof("🎥 Starting video: mode=%s %dx%d @ %d fps, bitrate %s",

@@ -325,6 +325,9 @@ type LocalizedStrings struct {
 	EnableVSync               string // "VSync" (enable vsync for capture card)
 	AIVision                  string // "AI Vision" (live Set-of-Mark detection overlay checkbox)
 	AIVisionHint              string // hint shown under the AI Vision checkbox
+	Color444                  string // "4:4:4 Color (Pro)" checkbox, shown only when H.265 is selected
+	Color444Hint              string // hint under the checkbox when 4:4:4 is available (checked or not)
+	Color444UnavailableHint   string // hint under the (disabled, unchecked) checkbox when the agent doesn't currently offer 4:4:4
 	MuteAudio                 string // "Mute Audio"
 	UnmuteAudio               string // "Unmute Audio"
 	DeviceAudio               string // "Audio"
@@ -711,6 +714,9 @@ func EN() *LocalizedStrings {
 		EnableVSync:               "VSync",
 		AIVision:                  "AI Vision",
 		AIVisionHint:              "Overlays live object detection (Set-of-Mark boxes + hex ids) on the video, as an agent's ui.parse call would see it.",
+		Color444:                  "4:4:4 Color (RustShine Pro)",
+		Color444Hint:              "Full-resolution color instead of the usual 4:2:0 -- sharper text and fine detail, at a higher bitrate cost.",
+		Color444UnavailableHint:   "Requires RustShine Pro and a GPU with HEVC 4:4:4 hardware encode.",
 		MuteAudio:                 "Mute Audio",
 		UnmuteAudio:               "Unmute Audio",
 		DeviceAudio:               "Audio",

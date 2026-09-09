@@ -49,6 +49,10 @@ type MoonlightService struct {
 	connGen    atomic.Uint64
 	serverHost string
 	videoMode  string
+	// color444, set via SetColor444, requests RustShine Pro 4:4:4 chroma --
+	// see moonlightVideoFormat's doc comment for how this changes the
+	// VIDEO_FORMAT_* bit passed into do_li_start's STREAM_CONFIGURATION.
+	color444   bool
 	width      int
 	height     int
 	fps        int // overrides config.VideoFPS when > 0; set via SetFPS before ConnectToMoonlight
@@ -459,7 +463,7 @@ func (m *MoonlightService) ConnectToMoonlight() error {
 		sessionUrl, rikey,
 		serverInfo.AppVersion, serverInfo.GfeVersion,
 		serverInfo.ServerCodecModeSupport,
-		moonlightVideoFormat(m.videoMode),
+		moonlightVideoFormat(m.videoMode, m.color444),
 		width, height, fps, bitrate,
 		pipeWrite, audioPipeWrite,
 		func(cgoErr error) {
@@ -859,11 +863,30 @@ func (m *MoonlightService) SetVideoMode(mode string) {
 	m.videoMode = mode
 }
 
-// moonlightVideoFormat maps a video mode string to the VIDEO_FORMAT_* constant
-// used by moonlight-common-c (matches Limelight.h defines).
-func moonlightVideoFormat(mode string) int {
+// SetColor444 requests RustShine Pro 4:4:4 chroma for the next
+// ConnectToMoonlight -- see moonlightVideoFormat's doc comment.
+func (m *MoonlightService) SetColor444(enabled bool) {
+	m.color444 = enabled
+}
+
+// moonlightVideoFormat maps a video mode string (plus the RustShine Pro
+// color444 checkbox) to the VIDEO_FORMAT_* constant used by
+// moonlight-common-c (matches Limelight.h defines) -- do_li_start passes
+// this straight through as cfg.supportedVideoFormats, and
+// RtspConnection.c's performRtspHandshake ANDs it against the server's own
+// /serverinfo ServerCodecModeSupport bit to decide the real negotiated
+// format (see SdpGenerator.c: VIDEO_FORMAT_MASK_YUV444 is what actually
+// sets the ANNOUNCE's chromaSamplingType). color444 only changes anything
+// for VideoModeH265 -- this project's hardware encode path (VAAPI HEVC
+// Main 4:4:4, see rust-shine's video-encode crate) has no H.264 or AV1
+// 4:4:4 profile wired up, so the checkbox is silently ignored for those
+// modes rather than requesting a format the server could never satisfy.
+func moonlightVideoFormat(mode string, color444 bool) int {
 	switch mode {
 	case models.VideoModeH265:
+		if color444 {
+			return 0x0400 // VIDEO_FORMAT_H265_REXT8_444
+		}
 		return 0x0100 // VIDEO_FORMAT_H265
 	case models.VideoModeAV1:
 		return 0x1000 // VIDEO_FORMAT_AV1_MAIN8

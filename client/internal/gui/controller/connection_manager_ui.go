@@ -56,31 +56,12 @@ func (cm *ConnectionManager) initTailscaleMode() {
 	go cm.refreshTailscaleStatus()
 }
 
-func (cm *ConnectionManager) showLanguageMenu(anchor fyne.CanvasObject) {
-	currentLanguage := cm.app.Preferences().StringWithFallback("language", "en")
-	view.ShowStyledMenu(anchor, []view.StyledMenuItem{
-		{
-			Label:    "English",
-			Selected: currentLanguage == "en",
-			OnTap: func() {
-				cm.setLanguage("en")
-			},
-		},
-		{
-			Label:    "Español",
-			Selected: currentLanguage == "es",
-			OnTap: func() {
-				cm.setLanguage("es")
-			},
-		},
-		{
-			Label:    "Українська",
-			Selected: currentLanguage == "uk" || currentLanguage == "ua",
-			OnTap: func() {
-				cm.setLanguage("uk")
-			},
-		},
-	})
+// SetLanguage changes the active language and reloads the UI to reflect it
+// -- the header's own HeaderDropdown-styled language selector (gui.
+// newConnectionHeader) calls this directly instead of routing through a
+// ShowStyledMenu popup the way it used to.
+func (cm *ConnectionManager) SetLanguage(code string) {
+	cm.setLanguage(code)
 }
 
 func (cm *ConnectionManager) openQuickStartDocs() {
@@ -469,6 +450,3 @@ func formatConnectionAddressSummary(internalHost, tailscaleHost string) string {
 	return "LAN: " + internalHost + "\nTS: " + tailscaleHost
 }
 
-func (cm *ConnectionManager) ShowLanguageMenu(anchor fyne.CanvasObject) {
-	cm.showLanguageMenu(anchor)
-}

@@ -103,12 +103,6 @@ var (
 	DiscordIconDim    = fyne.NewStaticResource("message-chat-square-svgrepo-com-dim.svg", recolorStrokeIcon(messageChatSquareIcon, "#8E8E8E", "1.9"))
 	DiscordIcon       = fyne.NewStaticResource("message-chat-square-svgrepo-com.svg", recolorStrokeIcon(messageChatSquareIcon, "#F5F5F5", "1.9"))
 	DiscordIconHeader = fyne.NewStaticResource("message-chat-square-svgrepo-com-header.svg", recolorStrokeIcon(messageChatSquareIcon, "#c3c6b4", "1.9"))
-	// LanguageIconHeader: language-svgrepo-com.svg is a filled shape (root
-	// <svg fill="#000000">, no stroke attribute at all) -- recolorStrokeIcon
-	// had nothing to match here, so this rendered solid black regardless of
-	// the color passed in. Every other Language* variant already uses
-	// recolorFillIcon; this one just hadn't been fixed to match.
-	LanguageIconHeader = fyne.NewStaticResource("language-svgrepo-com-header.svg", recolorFillIcon(languageIcon, "#c3c6b4"))
 	// QuestionIconHeader: question-svgrepo-com.svg mixes a stroked circle
 	// (stroke="#000000") with a filled "?" glyph (fill="#000000") in the same
 	// file -- recolorStrokeIcon only recolored the circle, leaving the

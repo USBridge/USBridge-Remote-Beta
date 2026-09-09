@@ -12,6 +12,14 @@ import (
 	"github.com/sirupsen/logrus"
 )
 
+// connectionsViewModePrefKey persists the Grid/List toggle (view.
+// ConnectionManagerUI's viewMode) across restarts via app.Preferences() --
+// the same small key/value store already used for e.g. "language" and
+// "clipboard_sync_enabled" elsewhere in this package. Defaults to "grid"
+// (view.NewConnectionManagerUI's own fallback) the first time the app runs,
+// before this key has ever been set.
+const connectionsViewModePrefKey = "connections_view_mode"
+
 func (cm *ConnectionManager) createInterface() {
 	cm.ui = view.NewConnectionManagerUI(
 		cm.handleQRScan,
@@ -20,6 +28,10 @@ func (cm *ConnectionManager) createInterface() {
 		cm.openHardwarePromo,
 		cm.handlePasteLink,
 		cm.handleConnectionSortToggle,
+		cm.app.Preferences().StringWithFallback(connectionsViewModePrefKey, "grid"),
+		func(mode string) {
+			cm.app.Preferences().SetString(connectionsViewModePrefKey, mode)
+		},
 	)
 	cm.refreshConnectionsList()
 	cm.initTailscaleMode()

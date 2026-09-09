@@ -52,6 +52,14 @@ type ConnectionManagerUI struct {
 	lastSummary ConnectionsSummary
 	hasRows     bool
 
+	// onViewModeChange, when set, is called from setViewMode after
+	// viewMode actually changes -- lets the controller persist the choice
+	// (see ConnectionManager.createInterface, which backs it with
+	// app.Preferences() the same way it already does for e.g. "language")
+	// without this package needing to know anything about preferences
+	// storage itself.
+	onViewModeChange func(mode string)
+
 	// activeSort mirrors viewMode for the header's KVM/Agent count badges:
 	// "" (default), "kvm", or "agent" -- which one (if any) is currently
 	// pressed/highlighted. Persists across SetRows re-renders the same way
@@ -326,7 +334,15 @@ var connectionActionBlockedFill = design.ColorGray900
 // "pressed and busy" rather than swapping to an unrelated spinner icon.
 var connectLoadingFill = color.NRGBA{R: 0x9d, G: 0xb9, B: 0x62, A: 0xff}
 
-func NewConnectionManagerUI(onQR func(), onAdd func(), onHelp func(), onPromo func(), onPasteLink func(), onSortToggle func(kind string)) *ConnectionManagerUI {
+// NewConnectionManagerUI builds the connections screen. initialViewMode is
+// "grid" or "list" (anything else falls back to "grid", this screen's
+// default); onViewModeChange, if non-nil, is called whenever the Grid/List
+// toggle actually changes it -- see ConnectionManagerUI.onViewModeChange's
+// doc comment.
+func NewConnectionManagerUI(onQR func(), onAdd func(), onHelp func(), onPromo func(), onPasteLink func(), onSortToggle func(kind string), initialViewMode string, onViewModeChange func(mode string)) *ConnectionManagerUI {
+	if initialViewMode != "grid" && initialViewMode != "list" {
+		initialViewMode = "grid"
+	}
 	connectionsBox := container.NewVBox()
 	// Side margins match connectionsHeaderSideMargin (the section header
 	// above) so List rows/Grid cards line up with the header's own edges
@@ -361,7 +377,8 @@ func NewConnectionManagerUI(onQR func(), onAdd func(), onHelp func(), onPromo fu
 		ConnectionsBox:    connectionsBox,
 		contentArea:       contentArea,
 		topHelpBtn:        topHelpBtn,
-		viewMode:          "list",
+		viewMode:          initialViewMode,
+		onViewModeChange:  onViewModeChange,
 		onHelp:            onHelp,
 		onPromo:           onPromo,
 	}
@@ -392,6 +409,9 @@ func (ui *ConnectionManagerUI) setViewMode(mode string) {
 		return
 	}
 	ui.viewMode = mode
+	if ui.onViewModeChange != nil {
+		ui.onViewModeChange(mode)
+	}
 	if !ui.hasRows {
 		return
 	}

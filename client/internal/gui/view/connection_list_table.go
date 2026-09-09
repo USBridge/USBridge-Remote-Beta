@@ -69,6 +69,14 @@ var (
 
 	connectionListCompactColumnLabels = []string{"OS", "NAME", "STATE"}
 	connectionListCompactColumnWidths = []float32{32, 0, 70}
+
+	// connectionListAddOnlyColumn{Labels,Widths} is the table's shape when
+	// there are zero saved connections and the only row is the "Add New
+	// Connect" placeholder (see buildConnectionsListAddOnlyTable) -- OS/
+	// STATE/NETWORK/ROUTE BRIDGE have nothing real to show for a row that
+	// isn't a connection, so only NAME and ACTIONS survive.
+	connectionListAddOnlyColumnLabels = []string{"NAME", "ACTIONS"}
+	connectionListAddOnlyColumnWidths = []float32{0, 150}
 )
 
 const connectionListColumnGap float32 = 16
@@ -79,8 +87,16 @@ const connectionListSplitGap float32 = 16
 
 // NewConnectionsListTable builds the whole List-mode table as one
 // CanvasObject: a header row of column titles, then one row per item,
-// separated by hairline dividers, all inside a single card.
-func NewConnectionsListTable(items []ConnectionListItem) fyne.CanvasObject {
+// separated by hairline dividers, all inside a single card. With zero
+// items, this used to render nothing at all (see
+// ConnectionManagerUI.SetEmptyState, since removed) -- addActions makes it
+// render a single "Add New Connect" row instead (buildConnectionsListAddOnlyTable),
+// List's own equivalent of Grid mode's ever-present add tile
+// (NewAddConnectionGridCard).
+func NewConnectionsListTable(items []ConnectionListItem, addActions AddConnectionCardActions) fyne.CanvasObject {
+	if len(items) == 0 {
+		return buildConnectionsListAddOnlyTable(addActions)
+	}
 	table, _, _ := buildConnectionsListTable(items, false, -1)
 	return table
 }
@@ -150,6 +166,87 @@ func buildConnectionsListTable(items []ConnectionListItem, compact bool, highlig
 
 	table = container.NewStack(bg, NewInset(rowsCol, 16, 16, 12, 12))
 	return table, highlightY, highlightHeight
+}
+
+// buildConnectionsListAddOnlyTable is NewConnectionsListTable's zero-items
+// shape: the same card chrome (dark background, hairline border, header
+// row) as a real table, but with only the NAME/ACTIONS columns
+// (connectionListAddOnlyColumnLabels/Widths) and a single row --
+// newConnectionListAddRow -- instead of one per saved connection.
+func buildConnectionsListAddOnlyTable(actions AddConnectionCardActions) fyne.CanvasObject {
+	labels, widths := connectionListAddOnlyColumnLabels, connectionListAddOnlyColumnWidths
+
+	dividerColor := color.NRGBA{R: 0x29, G: 0x2d, B: 0x27, A: 0xff}
+	div := canvas.NewRectangle(dividerColor)
+	div.SetMinSize(fyne.NewSize(1, 1))
+
+	header := newConnectionListHeaderRow(labels, widths)
+	row := newConnectionListAddRow(actions, widths)
+	rowsCol := container.New(&tightStatsVBoxLayout{Gap: 0}, header, NewInset(div, 0, 0, 2, 2), row)
+
+	bg := canvas.NewRectangle(design.ColorGray900)
+	bg.CornerRadius = design.RadiusLG
+	bg.StrokeColor = design.ColorTailscaleChipBorder
+	bg.StrokeWidth = 1
+
+	return container.NewStack(bg, NewInset(rowsCol, 16, 16, 12, 12))
+}
+
+// newConnectionListAddRow is List mode's "Add New Connect" placeholder row
+// (see buildConnectionsListAddOnlyTable) -- the NAME column repeats the
+// title as its own sub-line (there's no real platform/status to show, the
+// way a real row's newConnectionListNameCell shows under its name), and
+// ACTIONS holds the same Scan QR / Paste Link shortcuts
+// NewAddConnectionGridCard's own buttons open, styled identically (same
+// addConnectionCardMutedColor/addConnectionCardHoverColor this package's
+// Grid add-tile already uses) just resized to a table row.
+func newConnectionListAddRow(actions AddConnectionCardActions, widths []float32) fyne.CanvasObject {
+	const addRowLabel = "Add New Connect"
+
+	title := NewBrandText(addRowLabel, 11, design.ColorTextLight, true)
+	subtitle := canvas.NewText(addRowLabel, addConnectionCardMutedColor)
+	subtitle.TextSize = 9
+	nameCell := container.New(&tightStatsVBoxLayout{Gap: 2}, title, subtitle)
+
+	qrBtn := newIconChromeButton(iconChromeButtonSpec{
+		NormalFill:      color.Transparent,
+		HoverFill:       color.Transparent,
+		Stroke:          design.ColorTailscaleChipBorder,
+		StrokeWidth:     1,
+		CornerRadius:    6,
+		LabelColor:      addConnectionCardMutedColor,
+		HoverLabelColor: addConnectionCardHoverColor,
+		HoverStroke:     addConnectionCardHoverColor,
+		LabelSize:       10,
+		NormalIcon:      assets.QRCodeLight,
+		HoverIcon:       assets.QRCodeAccent,
+		IconSize:        fyne.NewSize(11, 11),
+		ButtonSize:      fyne.NewSize(0, 23),
+		OnTapped:        actions.OnQR,
+	})
+	qrBtn.SetText("Scan QR")
+
+	pasteBtn := newIconChromeButton(iconChromeButtonSpec{
+		NormalFill:      color.Transparent,
+		HoverFill:       color.Transparent,
+		Stroke:          design.ColorTailscaleChipBorder,
+		StrokeWidth:     1,
+		CornerRadius:    6,
+		LabelColor:      addConnectionCardMutedColor,
+		HoverLabelColor: addConnectionCardHoverColor,
+		HoverStroke:     addConnectionCardHoverColor,
+		LabelSize:       10,
+		NormalIcon:      assets.LinkIconMuted,
+		HoverIcon:       assets.LinkIconLime,
+		IconSize:        fyne.NewSize(11, 11),
+		ButtonSize:      fyne.NewSize(0, 23),
+		OnTapped:        actions.OnPasteLink,
+	})
+	pasteBtn.SetText("Paste Link")
+
+	actionsCell := container.NewBorder(nil, nil, nil, container.New(&DeviceRowControlsLayout{Gap: 6}, qrBtn, pasteBtn))
+
+	return container.New(&connectionsTableRowLayout{Widths: widths, Gap: connectionListColumnGap}, nameCell, actionsCell)
 }
 
 func newConnectionListHeaderRow(labels []string, widths []float32) fyne.CanvasObject {

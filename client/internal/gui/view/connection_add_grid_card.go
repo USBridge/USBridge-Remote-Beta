@@ -1,6 +1,6 @@
 package view
 
-// connection_add_grid_card.go -- the "Add New Device" placeholder tile Grid
+// connection_add_grid_card.go -- the "Add New Connect" placeholder tile Grid
 // mode always appends after the real connection cards (see
 // ConnectionManager.refreshConnectionsList in the controller package). Same
 // footprint as a real card (connectionCardWidth/Height) so it slots into the
@@ -109,7 +109,7 @@ func NewAddConnectionGridCard(actions AddConnectionCardActions) fyne.CanvasObjec
 	})
 	addControl := container.NewStack(addRingSized, container.NewCenter(plusImg), addBtn)
 
-	title := NewBrandText("Add New Device", 13, design.ColorTextLight, true)
+	title := NewBrandText("Add New Connect", 13, design.ColorTextLight, true)
 
 	subtitleLine1 := canvas.NewText("Scan a QR code or paste a link", addConnectionCardMutedColor)
 	subtitleLine2 := canvas.NewText("to add a hardware or software agent", addConnectionCardMutedColor)

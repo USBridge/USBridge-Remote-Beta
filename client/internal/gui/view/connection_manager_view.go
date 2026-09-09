@@ -51,6 +51,14 @@ type ConnectionManagerUI struct {
 	lastCards   []fyne.CanvasObject
 	lastSummary ConnectionsSummary
 	hasRows     bool
+	// addActions is List mode's "Add New Connect" placeholder row's Scan
+	// QR/Paste Link buttons (see connection_list_table.go's
+	// newConnectionListAddRow) -- Grid mode's equivalent tile gets its own
+	// copy of the same actions passed straight into lastCards by the
+	// controller (createConnectionGridCard), but List's placeholder is only
+	// ever built here, inside applyConnectionsContent, when lastRows is
+	// empty -- so SetRows caches it the same way it does everything else.
+	addActions AddConnectionCardActions
 
 	// onViewModeChange, when set, is called from setViewMode after
 	// viewMode actually changes -- lets the controller persist the choice
@@ -435,38 +443,20 @@ func (ui *ConnectionManagerUI) applyConnectionsContent() {
 		cellSize := fyne.NewSize(connectionCardWidth+gap, connectionCardHeight+gap)
 		grid := container.NewGridWrap(cellSize, padded...)
 		ui.ConnectionsBox.Add(grid)
-	} else if len(ui.lastRows) > 0 {
+	} else if ui.viewMode != "grid" {
 		// One shared table (NewConnectionsListTable), not one card per
 		// connection -- see connection_list_table.go. editPanel switches to
-		// the split edit layout instead (NewConnectionsListSplit).
+		// the split edit layout instead (NewConnectionsListSplit). With zero
+		// rows, editPanel is never set (nothing to edit), so this always
+		// falls through to NewConnectionsListTable's own "Add New Connect"
+		// placeholder row.
 		if ui.editPanel != nil {
 			ui.ConnectionsBox.Add(NewConnectionsListSplit(ui.lastRows, ui.editIndex, ui.editPanel))
 		} else {
-			ui.ConnectionsBox.Add(NewConnectionsListTable(ui.lastRows))
+			ui.ConnectionsBox.Add(NewConnectionsListTable(ui.lastRows, ui.addActions))
 		}
 	}
 	ui.ConnectionsBox.Refresh()
-}
-
-func (ui *ConnectionManagerUI) SetEmptyState() {
-	stopCanvasAnimations(ui.ConnectionsBox)
-	ui.ConnectionsBox.RemoveAll()
-	ui.hasRows = false
-	ui.lastRows = nil
-	ui.lastCards = nil
-
-	// No connections to count -- zero-valued ConnectionsSummary renders no
-	// badges.
-	header, buttons := newConnectionsHeader(ConnectionsSummary{}, ui.headerActions, ui.viewMode, ui.activeSort)
-	ui.headerButtons = buttons
-
-	spacer := canvas.NewRectangle(color.Transparent)
-	spacer.SetMinSize(fyne.NewSize(1, 100))
-
-	ui.contentArea.Objects = []fyne.CanvasObject{
-		container.NewBorder(header, nil, nil, nil, spacer),
-	}
-	ui.contentArea.Refresh()
 }
 
 // NewEmptyStatePromoCard builds the "no saved connections" hardware promo
@@ -707,14 +697,19 @@ func (l *emptyStatePromoTitleLayout) MinSize(objects []fyne.CanvasObject) fyne.S
 // editPanel is non-nil while List is in its split-edit layout (see
 // NewConnectionsListSplit/ConnectionManagerUI.editPanel) -- nil the rest of
 // the time; editIndex is the rows index it belongs to, meaningful only
-// alongside a non-nil editPanel.
-func (ui *ConnectionManagerUI) SetRows(rows []ConnectionListItem, cards []fyne.CanvasObject, summary ConnectionsSummary, editIndex int, editPanel fyne.CanvasObject) {
+// alongside a non-nil editPanel. addActions are the Scan QR/Paste Link
+// actions List's "Add New Connect" placeholder row uses when rows is empty
+// (see applyConnectionsContent/connection_list_table.go) -- the same
+// actions the controller already builds for Grid mode's own always-present
+// add tile, appended into cards there instead.
+func (ui *ConnectionManagerUI) SetRows(rows []ConnectionListItem, cards []fyne.CanvasObject, summary ConnectionsSummary, editIndex int, editPanel fyne.CanvasObject, addActions AddConnectionCardActions) {
 	ui.lastRows = rows
 	ui.lastCards = cards
 	ui.lastSummary = summary
 	ui.hasRows = true
 	ui.editPanel = editPanel
 	ui.editIndex = editIndex
+	ui.addActions = addActions
 	ui.applyConnectionsContent()
 
 	header, buttons := newConnectionsHeader(summary, ui.headerActions, ui.viewMode, ui.activeSort)

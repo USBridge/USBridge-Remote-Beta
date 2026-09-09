@@ -142,16 +142,10 @@ func (cm *ConnectionManager) refreshConnectionsList() {
 		// struct literal with no UI at all.
 		return
 	}
-	if len(cm.connections) == 0 {
-		cm.ui.SetEmptyState()
-		cm.notifyConnectionsState()
-		return
-	}
-
 	order := cm.connectionsDisplayOrder()
 
 	rows := make([]view.ConnectionListItem, 0, len(cm.connections))
-	cards := make([]fyne.CanvasObject, 0, len(cm.connections))
+	cards := make([]fyne.CanvasObject, 0, len(cm.connections)+1)
 	remoteOSValues := make([]string, 0, len(cm.connections))
 	for _, idx := range order {
 		conn := cm.connections[idx]
@@ -159,8 +153,12 @@ func (cm *ConnectionManager) refreshConnectionsList() {
 		cards = append(cards, cm.createConnectionGridCard(conn, idx))
 		remoteOSValues = append(remoteOSValues, conn.RemoteOS)
 	}
-	// Grid mode only -- rows (List) has no equivalent tile, so this is only
-	// ever appended to cards. Always last, per the brief.
+	// Grid mode's own tile, always last, per the brief -- with zero
+	// connections this is the only card, so the grid never goes empty (see
+	// view.ConnectionManagerUI.applyConnectionsContent). List's equivalent
+	// (rows has no such tile) is addConnectionCardActions() below, used only
+	// when rows itself is empty -- see connection_list_table.go's
+	// newConnectionListAddRow.
 	cards = append(cards, cm.newAddConnectionGridCard())
 
 	editIndex := -1
@@ -178,8 +176,21 @@ func (cm *ConnectionManager) refreshConnectionsList() {
 		}
 		editPanel = cm.buildListEditPanel(cm.editingListIndex)
 	}
-	cm.ui.SetRows(rows, cards, view.SummarizeConnections(remoteOSValues), editIndex, editPanel)
+	cm.ui.SetRows(rows, cards, view.SummarizeConnections(remoteOSValues), editIndex, editPanel, cm.addConnectionCardActions())
 	cm.notifyConnectionsState()
+}
+
+// addConnectionCardActions are the Scan QR/Paste Link/blank-dialog entry
+// points shared by Grid mode's always-present add tile
+// (newAddConnectionGridCard) and List mode's equivalent placeholder row
+// (view.ConnectionManagerUI.SetRows' addActions, used only when there are
+// zero saved connections).
+func (cm *ConnectionManager) addConnectionCardActions() view.AddConnectionCardActions {
+	return view.AddConnectionCardActions{
+		OnAdd:       cm.showAddDialog,
+		OnQR:        cm.handleQRScan,
+		OnPasteLink: cm.handlePasteLink,
+	}
 }
 
 // connectionsDisplayOrder returns cm.connections' indices in the order the
@@ -409,18 +420,14 @@ func (cm *ConnectionManager) createConnectionGridCard(conn SavedConnection, idx 
 	)
 }
 
-// newAddConnectionGridCard builds Grid mode's "Add New Device" placeholder
+// newAddConnectionGridCard builds Grid mode's "Add New Connect" placeholder
 // tile (view.NewAddConnectionGridCard) -- appended after the real cards by
 // refreshConnectionsList. Its "+" opens the same blank Add Connection dialog
 // the header's own Add button does; QR/paste-link are shortcuts into the
 // same flow via a prefilled dialog once they've got something to fill in
 // with (showPrefilledAddDialog).
 func (cm *ConnectionManager) newAddConnectionGridCard() fyne.CanvasObject {
-	return view.NewAddConnectionGridCard(view.AddConnectionCardActions{
-		OnAdd:       cm.showAddDialog,
-		OnQR:        cm.handleQRScan,
-		OnPasteLink: cm.handlePasteLink,
-	})
+	return view.NewAddConnectionGridCard(cm.addConnectionCardActions())
 }
 
 // saveGridCardEdit commits a Grid card's inline edit (ConnectionCardActions.

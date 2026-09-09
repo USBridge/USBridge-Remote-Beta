@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"strings"
 	"sync"
+	"time"
 
 	"usbridge-client/internal/gui/assets"
 	"usbridge-client/internal/gui/design"
@@ -14,6 +15,7 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
@@ -448,6 +450,262 @@ func ShowConfirmToast(message string, callback func(bool), parent fyne.Window) {
 			return fyne.NewPos((canvasSize.Width-panelSize.Width)/2, canvasSize.Height-panelSize.Height-bottomMargin)
 		},
 	})
+}
+
+// connectingProgressBarHeight is the connecting toast's own progress
+// bar thickness -- deliberately just a hairline (the user's own brief: "a
+// couple pixels"), not a normal-sized ProgressBar.
+const connectingProgressBarHeight float32 = 2
+
+// connectingProgressTrackColor is the same near-black divider tone this
+// screen's cards already use (connection_grid_card.go's dividerColor) --
+// visible against the toast's ColorGray900 background without competing
+// with the gradient fill.
+var connectingProgressTrackColor = color.NRGBA{R: 0x29, G: 0x2d, B: 0x27, A: 0xff}
+
+// connectingProgressBar is ShowConnectingToast's own thin progress
+// indicator: a dark track with a teal-to-lime gradient fill that grows
+// left-to-right as SetProgress advances. The gradient's two stops are
+// stretched across the CURRENT fill width rather than the bar's full
+// width, so the lime end always sits at the fill's leading edge -- it
+// reads as "gaining ground toward lime", not a fixed two-tone bar that
+// happens to be cropped.
+type connectingProgressBar struct {
+	widget.BaseWidget
+
+	progress float32 // 0..1
+
+	track *canvas.Rectangle
+	fill  *canvas.LinearGradient
+}
+
+func newConnectingProgressBar() *connectingProgressBar {
+	b := &connectingProgressBar{}
+	b.ExtendBaseWidget(b)
+	return b
+}
+
+// SetProgress moves the fill to p (clamped to [0, 1]) and repaints
+// immediately -- safe to call often (ShowConnectingToast's ticker calls it
+// several times a second) since it only touches this widget's own two
+// canvas objects, no parent re-layout.
+func (b *connectingProgressBar) SetProgress(p float32) {
+	if p < 0 {
+		p = 0
+	} else if p > 1 {
+		p = 1
+	}
+	b.progress = p
+	b.Refresh()
+}
+
+func (b *connectingProgressBar) CreateRenderer() fyne.WidgetRenderer {
+	b.track = canvas.NewRectangle(connectingProgressTrackColor)
+	b.fill = canvas.NewHorizontalGradient(design.ColorConnectionBadgeText, design.ColorConnectionAddFill)
+	return &connectingProgressBarRenderer{bar: b, track: b.track, fill: b.fill}
+}
+
+type connectingProgressBarRenderer struct {
+	bar   *connectingProgressBar
+	track *canvas.Rectangle
+	fill  *canvas.LinearGradient
+}
+
+func (r *connectingProgressBarRenderer) Layout(size fyne.Size) {
+	r.track.Resize(size)
+	r.track.Move(fyne.NewPos(0, 0))
+
+	r.fill.Resize(fyne.NewSize(size.Width*r.bar.progress, size.Height))
+	r.fill.Move(fyne.NewPos(0, 0))
+}
+
+func (r *connectingProgressBarRenderer) MinSize() fyne.Size {
+	return fyne.NewSize(0, connectingProgressBarHeight)
+}
+
+func (r *connectingProgressBarRenderer) Refresh() {
+	r.Layout(r.bar.Size())
+	canvas.Refresh(r.bar)
+}
+
+func (r *connectingProgressBarRenderer) Objects() []fyne.CanvasObject {
+	return []fyne.CanvasObject{r.track, r.fill}
+}
+
+func (r *connectingProgressBarRenderer) Destroy() {}
+
+// ConnectingToastHandle controls a toast started by ShowConnectingToast.
+// Close hides it; ShowError transforms the SAME panel in place into an error
+// state (red border, an X to close, a small copy-to-clipboard icon) instead
+// of closing it and opening a separate error dialog -- so a connection
+// failure that happens while the user is watching this toast reads as "this
+// same wait turned into an error", not a toast vanishing followed by an
+// unrelated popup appearing on top of it.
+type ConnectingToastHandle struct {
+	popup  *widget.PopUp
+	parent fyne.Window
+	body   *fyne.Container
+	border *canvas.Rectangle
+
+	stopTicker chan struct{}
+	closeOnce  sync.Once
+}
+
+// Close hides the toast and stops its progress ticker (if still running).
+// Safe to call more than once (e.g. both a success and a stale failure
+// callback racing) and safe to call from any goroutine.
+func (h *ConnectingToastHandle) Close() {
+	if h == nil || h.popup == nil {
+		return
+	}
+	h.closeOnce.Do(func() {
+		if h.stopTicker != nil {
+			close(h.stopTicker)
+		}
+		fyne.Do(func() {
+			h.popup.Hide()
+		})
+	})
+}
+
+// ShowError transforms the toast in place: stops the progress bar, swaps its
+// body for the (word-wrapped) error message, turns the border red, and adds
+// a top-right close (X) button plus a small copy-to-clipboard icon button.
+// Must be called from the Fyne goroutine -- every call site in this app
+// already runs inside fyne.Do. A no-op once the toast has been closed.
+func (h *ConnectingToastHandle) ShowError(message string) {
+	if h == nil || h.popup == nil {
+		return
+	}
+	if h.stopTicker != nil {
+		close(h.stopTicker)
+		h.stopTicker = nil
+	}
+
+	h.border.StrokeColor = design.ColorDanger
+	h.border.Refresh()
+
+	errLabel := widget.NewLabel(message)
+	errLabel.Wrapping = fyne.TextWrapWord
+
+	closeBtn := newConfirmDialogCloseButton(h.Close)
+
+	copyBtn := widget.NewButtonWithIcon("", theme.ContentCopyIcon(), func() {
+		if h.parent != nil && h.parent.Clipboard() != nil {
+			h.parent.Clipboard().SetContent(message)
+		}
+	})
+	copyBtn.Importance = widget.LowImportance
+
+	h.body.Objects = []fyne.CanvasObject{
+		container.NewBorder(nil, nil, nil, closeBtn, errLabel),
+		container.NewHBox(layout.NewSpacer(), copyBtn),
+	}
+	h.body.Refresh()
+	// Re-triggers the overlay's own layout pass so the panel resizes/repositions
+	// for the new (typically taller) content -- see Container.Refresh calling
+	// c.layout() unconditionally, which PopUp.Refresh cascades into via
+	// popUpRenderer.Refresh's r.popUp.Content.Refresh() call.
+	h.popup.Refresh()
+}
+
+// ShowConnectingToast shows the same small, non-dimming bottom-center panel
+// ShowConfirmToast uses (dark card, hairline border, no backdrop dimming),
+// but with the thin teal-to-lime connectingProgressBar under the message
+// instead of Yes/No buttons -- used while a connection attempt is in
+// flight, so it reads as "here's what's happening" rather than a
+// confirmation prompt.
+//
+// The bar fills over maxDuration (the same budget the connect attempt
+// itself is bounded by) regardless of how the attempt actually resolves --
+// reaching 100% just means "this is close to timing out", it says nothing
+// about success or failure. maxDuration <= 0 shows the message with no bar
+// animation (a caller with no real budget to reflect).
+//
+// The returned handle's Close hides the toast; ShowError turns it into an
+// inline error instead (see ConnectingToastHandle).
+func ShowConnectingToast(message string, maxDuration time.Duration, parent fyne.Window) *ConnectingToastHandle {
+	if parent == nil {
+		return &ConnectingToastHandle{}
+	}
+
+	text := canvas.NewText(message, design.ColorTextLight)
+	text.TextSize = 10
+
+	bar := newConnectingProgressBar()
+
+	body := container.NewVBox(
+		NewInset(text, 0, 0, 8, 8),
+		bar,
+	)
+
+	bg := canvas.NewRectangle(design.ColorGray900)
+	bg.CornerRadius = confirmToastRadius
+
+	border := canvas.NewRectangle(color.Transparent)
+	border.CornerRadius = confirmToastRadius
+	border.StrokeColor = design.ColorBorder
+	border.StrokeWidth = 1
+
+	panel := container.NewStack(
+		bg,
+		NewInset(body, 9, 9, 6, 6),
+		border,
+	)
+
+	popup := ShowOverlayPopup(parent, OverlayPopupSpec{
+		Panel:    panel,
+		DimColor: color.Transparent,
+		PanelSize: func(canvasSize fyne.Size, panel fyne.CanvasObject) fyne.Size {
+			margin := clampFloat32(minFloat32(canvasSize.Width, canvasSize.Height)*0.04, 20, 28)
+			maxWidth := canvasSize.Width - margin*2
+			if maxWidth <= 0 {
+				maxWidth = canvasSize.Width
+			}
+
+			panelMin := panel.MinSize()
+			panelWidth := minFloat32(maxFloat32(panelMin.Width, 240), maxWidth)
+			return fyne.NewSize(panelWidth, panelMin.Height)
+		},
+		PanelPos: func(canvasSize fyne.Size, panelSize fyne.Size) fyne.Position {
+			bottomMargin := clampFloat32(canvasSize.Height*0.05, 24, 40)
+			return fyne.NewPos((canvasSize.Width-panelSize.Width)/2, canvasSize.Height-panelSize.Height-bottomMargin)
+		},
+	})
+
+	handle := &ConnectingToastHandle{
+		popup:  popup,
+		parent: parent,
+		body:   body,
+		border: border,
+	}
+
+	if maxDuration > 0 {
+		handle.stopTicker = make(chan struct{})
+		stopTicker := handle.stopTicker
+		start := time.Now()
+		go func() {
+			ticker := time.NewTicker(100 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-stopTicker:
+					return
+				case <-ticker.C:
+					elapsed := time.Since(start)
+					progress := float32(elapsed) / float32(maxDuration)
+					fyne.Do(func() {
+						bar.SetProgress(progress)
+					})
+					if elapsed >= maxDuration {
+						return
+					}
+				}
+			}
+		}()
+	}
+
+	return handle
 }
 
 func ShowErrorDialog(err error, parent fyne.Window) {

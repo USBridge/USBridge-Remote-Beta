@@ -77,6 +77,50 @@ func (mw *MainWindow) setConnectionLoading(loading bool) {
 	mw.refreshConnectionControls()
 }
 
+// connectingToastBarDuration paces the connecting toast's progress bar --
+// deliberately NOT mw.config.APITimeout: that bounds only the first network
+// call inside doConnect, while several earlier steps (tsnet's own 25s
+// WaitUntilReady waits, sync, Tailscale registration polling) run on their
+// own separate timeouts and can make the real wall-clock attempt take
+// noticeably longer than APITimeout before anything actually resolves. The
+// bar reaching 100% doesn't close the toast (handleConnectingStateChange
+// only closes it once the real attempt resolves) -- it just gives a sense
+// of pace for a typical attempt without pretending to know the real one.
+const connectingToastBarDuration = 7 * time.Second
+
+// handleConnectingStateChange is ConnectionManager's connectingStateSink --
+// wired up once in createConnectionAddressBar (main_window_layout.go),
+// alongside the header's other cross-package status sinks. Shows/hides the
+// bottom "Connecting to X…" toast (view.ShowConnectingToast) in lockstep
+// with connectionPending's own start/stop, so it tracks a Connect press
+// regardless of which button started it (Grid card, List row, or a saved
+// deep link) without any of those call sites needing to know about the
+// toast themselves.
+func (mw *MainWindow) handleConnectingStateChange(connecting bool, name string) {
+	fyne.Do(func() {
+		if !connecting && mw.suppressConnectingToastClose {
+			// A connect failure just called ShowError on this same toast
+			// (see handleConnectFailure) -- leave it open instead of
+			// closing it out from under that transform.
+			mw.suppressConnectingToastClose = false
+			return
+		}
+
+		if mw.connectingToast != nil {
+			logrus.Infof("🔌 [CONNECT-TOAST] closing (connecting=%v name=%q)", connecting, name)
+			mw.connectingToast.Close()
+			mw.connectingToast = nil
+		}
+		if !connecting {
+			return
+		}
+
+		logrus.Infof("🔌 [CONNECT-TOAST] showing (name=%q)", name)
+		message := fmt.Sprintf(i18n.Current.ConnectingToConnection, name)
+		mw.connectingToast = view.ShowConnectingToast(message, connectingToastBarDuration, mw.window)
+	})
+}
+
 func (mw *MainWindow) clearConnectionPending() {
 	mw.isConnectionPending.Store(false)
 	mw.isConnectionLoading = false
@@ -775,6 +819,17 @@ func (mw *MainWindow) verifyActiveConnection() error {
 func (mw *MainWindow) handleConnectFailure(message string, err error) {
 	logrus.Errorf("%s: %v", message, err)
 	fyne.Do(func() {
+		// If the "Connecting to X…" toast is up for this attempt, keep it
+		// open through clearConnectionPending (which would otherwise close
+		// it via handleConnectingStateChange) so the error below can
+		// transform that same toast in place instead of closing it and
+		// popping a separate dialog on top. Not when the app is closing --
+		// there's no error to show then, so let the toast close normally
+		// instead of leaving it open with nothing left to transform it.
+		closing := mw.isClosing.Load()
+		toast := mw.connectingToast
+		mw.suppressConnectingToastClose = !closing && toast != nil
+
 		mw.clearConnectionPending()
 		mw.isConnected = false
 		mw.connectedProtocol = ""
@@ -782,8 +837,15 @@ func (mw *MainWindow) handleConnectFailure(message string, err error) {
 		mw.hostEntry.Enable()
 		mw.tokenEntry.Enable()
 		mw.protocolSelect.Enable()
-		if !mw.isClosing.Load() {
-			view.ShowErrorDialog(fmt.Errorf("%s: %w", message, err), mw.window)
+		if closing {
+			return
+		}
+
+		fullErr := fmt.Errorf("%s: %w", message, err)
+		if toast != nil {
+			toast.ShowError(fullErr.Error())
+		} else {
+			view.ShowErrorDialog(fullErr, mw.window)
 		}
 	})
 }

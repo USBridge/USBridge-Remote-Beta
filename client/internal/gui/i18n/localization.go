@@ -38,6 +38,10 @@ type LocalizedStrings struct {
 	DeleteConnectionTitle     string
 	DeleteConnectionConfirm   string
 	TailscaleRegisterLabel    string
+	// ConnectingToConnection is the bottom toast's message while a Connect
+	// attempt is in flight (view.ShowConnectingToast) -- %s is the
+	// connection's own saved name.
+	ConnectingToConnection string
 
 	// Video Widget
 	VideoNotStarted      string
@@ -426,6 +430,7 @@ func EN() *LocalizedStrings {
 		DeleteConnectionTitle:     "Delete connection",
 		DeleteConnectionConfirm:   "Are you sure you want to delete connection \"%s\"?",
 		TailscaleRegisterLabel:    "Register in Tailscale",
+		ConnectingToConnection:    "Connecting to \"%s\"…",
 
 		// Video Widget
 		VideoNotStarted:      "Video not started",
@@ -808,6 +813,7 @@ func ES() *LocalizedStrings {
 	locale.DeleteButton = "Eliminar"
 	locale.DeleteConnectionTitle = "Eliminar conexion"
 	locale.DeleteConnectionConfirm = "Seguro que deseas eliminar la conexion \"%s\"?"
+	locale.ConnectingToConnection = "Conectando a \"%s\"…"
 	locale.Devices = "Dispositivos"
 	locale.DevicesSectionStorage = "Almacenamiento"
 	locale.DevicesSectionBackup = "Dispositivo de respaldo"
@@ -951,6 +957,7 @@ func UKProper() *LocalizedStrings {
 	locale.DeleteButton = "Видалити"
 	locale.DeleteConnectionTitle = "Видалити з'єднання"
 	locale.DeleteConnectionConfirm = "Ви впевнені, що хочете видалити з'єднання \"%s\"?"
+	locale.ConnectingToConnection = "Підключення до \"%s\"…"
 	locale.Devices = "Пристрої"
 	locale.DevicesSectionStorage = "Сховище"
 	locale.DevicesSectionBackup = "Резервний пристрій"

@@ -66,6 +66,21 @@ type MainWindow struct {
 	currentStorageAvailable  int64
 	storageStatus            *models.StorageStatusData
 
+	// connectingToast is the bottom "Connecting to X…" toast (see
+	// handleConnectingStateChange) -- nil whenever the toast isn't showing.
+	// Only ever set/read from handleConnectingStateChange, itself always
+	// hopped onto the Fyne goroutine via fyne.Do, so no separate lock.
+	connectingToast *view.ConnectingToastHandle
+
+	// suppressConnectingToastClose tells the next handleConnectingStateChange
+	// call (fired by clearConnectionPending -> SetConnectionPending(false))
+	// to leave connectingToast open instead of closing it -- set right
+	// before that call by a connect failure that wants to transform the
+	// toast into an inline error (view.ConnectingToastHandle.ShowError)
+	// rather than close it and pop a separate error dialog. Same
+	// Fyne-goroutine-only invariant as connectingToast.
+	suppressConnectingToastClose bool
+
 	// Connection/Disconnection button
 	connectionBtn    *view.HeaderActionButton
 	protocolSelect   *widget.Select
@@ -88,23 +103,23 @@ type MainWindow struct {
 	lifecycleOps chan func()
 
 	// Status icons
-	connectionIcon *widget.Button
-	nbdIcon        *widget.Button
-	videoIcon      *headerStatusBadgeButton
-	audioIcon      *headerStatusBadgeButton
-	captureIcon    *widget.Button
-	keyboardIcon   *widget.Button
-	mouseIcon      *widget.Button
-	rndisIcon      *widget.Button
-	gamepadIcon    *widget.Button
-	cdromIcon      *widget.Button
-	backupIcon          fyne.CanvasObject
-	snapshotIcon        *widget.Button
-	scriptIcon          *widget.Button
-	runningScriptPath   string
-	runningScriptName   string
-	statusPanel         *fyne.Container
-	protocolPanel       *fyne.Container
+	connectionIcon    *widget.Button
+	nbdIcon           *widget.Button
+	videoIcon         *headerStatusBadgeButton
+	audioIcon         *headerStatusBadgeButton
+	captureIcon       *widget.Button
+	keyboardIcon      *widget.Button
+	mouseIcon         *widget.Button
+	rndisIcon         *widget.Button
+	gamepadIcon       *widget.Button
+	cdromIcon         *widget.Button
+	backupIcon        fyne.CanvasObject
+	snapshotIcon      *widget.Button
+	scriptIcon        *widget.Button
+	runningScriptPath string
+	runningScriptName string
+	statusPanel       *fyne.Container
+	protocolPanel     *fyne.Container
 
 	connectionLossInProgress atomic.Bool
 	shutdownInProgress       atomic.Bool
@@ -123,7 +138,7 @@ type MainWindow struct {
 	// never overrides an explicit user mute (toggleAudioMuted) set before
 	// or during that screen.
 	audioMutedByNav bool
-	onReadyCallback          func()
+	onReadyCallback func()
 
 	// lastGoodWindowSize/resizeGuardPending back the windowResizeGuard
 	// workaround (main_window_resize_guard.go) for a real Windows-only
@@ -164,7 +179,9 @@ func NewMainWindow(cfg *models.AppConfig) *MainWindow {
 	mw.nbdServer = service.NewNBDServer("127.0.0.1")
 	mw.tailscaleService = service.NewTailscaleService()
 	vc := newPlatformVideoClient(cfg)
-	if ts, ok := vc.(interface{ SetTailscaleService(*service.TailscaleService) }); ok {
+	if ts, ok := vc.(interface {
+		SetTailscaleService(*service.TailscaleService)
+	}); ok {
 		ts.SetTailscaleService(mw.tailscaleService)
 	}
 	mw.videoClient = vc

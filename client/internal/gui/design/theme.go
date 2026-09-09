@@ -85,6 +85,12 @@ var (
 	// reuses ColorHeaderAccentLine.
 	ColorLoginAvatarBg   = color.NRGBA{R: 0x2d, G: 0x2f, B: 0x34, A: 0xff}
 	ColorLoginAvatarText = color.NRGBA{R: 0xe9, G: 0xfd, B: 0xbb, A: 0xff}
+
+	// ColorDanger marks an error state (e.g. the connecting toast turning
+	// into an inline error -- view.ConnectingToastHandle.ShowError). Muted
+	// rather than a harsh saturated red, to match this palette's generally
+	// desaturated tones (compare ColorAlert's muted orange).
+	ColorDanger = color.NRGBA{R: 0xd9, G: 0x5c, B: 0x5c, A: 0xff}
 )
 
 const RadiusMD float32 = 8

@@ -102,6 +102,14 @@ type ConnectionManager struct {
 	// AccountManager onChange callback in NewConnectionManager).
 	accountStateSink func(loggedIn bool, email string)
 
+	// connectingStateSink pushes connectionPending's own start/stop into a
+	// bottom "Connecting to X…" toast with a progress bar (see
+	// gui.MainWindow's wiring) -- fired from setConnectionPendingState, the
+	// single choke point every connectionPending transition (both the Grid/
+	// List Connect button and MainWindow's own clearConnectionPending) goes
+	// through. name is only meaningful while connecting=true.
+	connectingStateSink func(connecting bool, name string)
+
 	// Account owns the account login + sync passphrase this connections
 	// list is end-to-end synced under -- see account_manager.go and
 	// connection_manager_sync.go. nil is a valid state (no account
@@ -476,6 +484,16 @@ func (cm *ConnectionManager) SetConnectionPending(pending bool) {
 }
 
 func (cm *ConnectionManager) setConnectionPendingState(pending bool, activeIndex int) {
+	// wasPending/wasActiveIndex let the connectingStateSink call below fire
+	// only on an actual transition -- refreshConnectionControls
+	// (main_window_layout.go) redundantly calls SetConnectionPending(true)
+	// on every refresh for as long as MainWindow's own isConnectionPending
+	// flag is set, which used to make this re-fire the sink every time too
+	// (tearing the "Connecting to X…" toast down and immediately rebuilding
+	// it) even though nothing about the pending state actually changed.
+	wasPending := cm.connectionPending
+	wasActiveIndex := cm.activeConnectionIndex
+
 	cm.connectionPending = pending
 	cm.activeConnectionIndex = activeIndex
 
@@ -484,6 +502,16 @@ func (cm *ConnectionManager) setConnectionPendingState(pending bool, activeIndex
 			cm.ui.SetActionButtonsDisabled(pending)
 			cm.refreshConnectionsList()
 		})
+	}
+
+	if cm.connectingStateSink != nil && (pending != wasPending || activeIndex != wasActiveIndex) {
+		name := ""
+		if pending && activeIndex >= 0 && activeIndex < len(cm.connections) {
+			name = cm.connections[activeIndex].Name
+		}
+		logrus.Infof("🔌 [CONNECT-TOAST] state change: pending=%v activeIndex=%d name=%q (was pending=%v activeIndex=%d)",
+			pending, activeIndex, name, wasPending, wasActiveIndex)
+		cm.connectingStateSink(pending, name)
 	}
 }
 
@@ -579,6 +607,12 @@ func (cm *ConnectionManager) OpenInfoPage() {
 // ConnectionHeaderHandle.SetTailscaleState).
 func (cm *ConnectionManager) SetTailscaleStatusSink(sink func(status, authLabel string)) {
 	cm.tsStatusSink = sink
+}
+
+// SetConnectingStateSink registers where the "connecting" toast's
+// start/stop goes -- see connectingStateSink's own doc comment.
+func (cm *ConnectionManager) SetConnectingStateSink(sink func(connecting bool, name string)) {
+	cm.connectingStateSink = sink
 }
 
 // SetAccountStateSink registers where live account login state goes --
@@ -711,14 +745,7 @@ func (cm *ConnectionManager) beginConnectionFromRow(idx int) bool {
 	if cm.connectionPending {
 		return false
 	}
-	cm.connectionPending = true
-	cm.activeConnectionIndex = idx
-	if cm.ui != nil {
-		fyne.Do(func() {
-			cm.ui.SetActionButtonsDisabled(true)
-			cm.refreshConnectionsList()
-		})
-	}
+	cm.setConnectionPendingState(true, idx)
 	return true
 }
 

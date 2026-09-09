@@ -407,9 +407,9 @@ func (mw *MainWindow) applyTabVisualState(activeIndex int) {
 // reported actions to the real controller calls.
 func (mw *MainWindow) createConnectionAddressBar() *fyne.Container {
 	band, handle := newConnectionHeader(connectionHeaderActions{
-		OnSelectLanguage: func(code string) {
+		OnShowLanguageMenu: func(anchor fyne.CanvasObject) {
 			if mw.connectionManager != nil {
-				mw.connectionManager.SetLanguage(code)
+				mw.connectionManager.ShowLanguageMenu(anchor)
 			}
 		},
 		OnOpenCommunity: func() {
@@ -430,7 +430,7 @@ func (mw *MainWindow) createConnectionAddressBar() *fyne.Container {
 		OnOpenAccount: func() {
 			mw.showAccountDialog()
 		},
-	}, mw.app.Preferences().StringWithFallback("language", "en"))
+	})
 
 	// The header owns the Tailscale toggle widget now; hand the controller a
 	// way to push live status into it without either side knowing the

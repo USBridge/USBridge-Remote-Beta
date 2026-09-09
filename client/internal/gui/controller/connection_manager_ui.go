@@ -56,12 +56,42 @@ func (cm *ConnectionManager) initTailscaleMode() {
 	go cm.refreshTailscaleStatus()
 }
 
-// SetLanguage changes the active language and reloads the UI to reflect it
-// -- the header's own HeaderDropdown-styled language selector (gui.
-// newConnectionHeader) calls this directly instead of routing through a
-// ShowStyledMenu popup the way it used to.
-func (cm *ConnectionManager) SetLanguage(code string) {
-	cm.setLanguage(code)
+// showLanguageMenu is the header's language button's tap callback (see
+// gui.connectionHeaderActions.OnShowLanguageMenu) -- styled via
+// ShowStyledMenuTeal to read like the per-connection protocol dropdown's
+// own AUTO/TS/LAN popup (teal, 10px), even though this stays a plain
+// ShowStyledMenu (full language names, no HeaderDropdown trigger).
+func (cm *ConnectionManager) showLanguageMenu(anchor fyne.CanvasObject) {
+	currentLanguage := cm.app.Preferences().StringWithFallback("language", "en")
+	view.ShowStyledMenuTeal(anchor, []view.StyledMenuItem{
+		{
+			Label:    "English",
+			Selected: currentLanguage == "en",
+			OnTap: func() {
+				cm.setLanguage("en")
+			},
+		},
+		{
+			Label:    "Español",
+			Selected: currentLanguage == "es",
+			OnTap: func() {
+				cm.setLanguage("es")
+			},
+		},
+		{
+			Label:    "Українська",
+			Selected: currentLanguage == "uk" || currentLanguage == "ua",
+			OnTap: func() {
+				cm.setLanguage("uk")
+			},
+		},
+	})
+}
+
+// ShowLanguageMenu is showLanguageMenu, exported for
+// createConnectionAddressBar (package gui) to call.
+func (cm *ConnectionManager) ShowLanguageMenu(anchor fyne.CanvasObject) {
+	cm.showLanguageMenu(anchor)
 }
 
 func (cm *ConnectionManager) openQuickStartDocs() {

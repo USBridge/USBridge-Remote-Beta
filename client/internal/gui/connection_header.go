@@ -22,12 +22,12 @@ import (
 // composition root (createConnectionAddressBar) wires these to the actual
 // controller calls.
 type connectionHeaderActions struct {
-	// OnSelectLanguage fires with "en"/"es"/"uk" when the language dropdown's
-	// selection changes.
-	OnSelectLanguage  func(code string)
-	OnOpenCommunity   func()
-	OnOpenInfo        func()
-	OnToggleTailscale func()
+	// OnShowLanguageMenu is called with the language button itself as the
+	// anchor, so the popup menu can position itself against it.
+	OnShowLanguageMenu func(anchor fyne.CanvasObject)
+	OnOpenCommunity    func()
+	OnOpenInfo         func()
+	OnToggleTailscale  func()
 	// OnOpenAccount opens the account login/sync dialog (see
 	// MainWindow.showAccountDialog) -- fired by the login avatar button.
 	OnOpenAccount func()
@@ -73,71 +73,30 @@ func (h *ConnectionHeaderHandle) SetAccountState(loggedIn bool, email string) {
 // wrapped in a GridWrap rather than changing that shared default.
 var headerCompactButtonSize = fyne.NewSize(28, 28)
 
-// languageDropdownLabel maps a stored language code ("en"/"es"/"uk", plus
-// the legacy "ua") to the short display label the header's language
-// dropdown shows/collapses to -- mirrors the per-connection protocol
-// dropdown's own AUTO/TS/LAN short-code convention.
-func languageDropdownLabel(code string) string {
-	switch strings.ToLower(strings.TrimSpace(code)) {
-	case "es":
-		return "ES"
-	case "uk", "ua":
-		return "UA"
-	default:
-		return "EN"
-	}
-}
-
-// languageDropdownCode is languageDropdownLabel's inverse -- the dropdown's
-// OnSelected callback receives one of its own option labels back, which
-// this resolves to the actual code i18n.SetLanguage/app.Preferences expect.
-func languageDropdownCode(label string) string {
-	switch label {
-	case "ES":
-		return "es"
-	case "UA":
-		return "uk"
-	default:
-		return "en"
-	}
-}
-
 // newConnectionHeader builds the top bar shown on the connections screen
 // (before a device is connected): logo+wordmark lockup on the left, and on
 // the right the Tailscale toggle, info, community and language buttons. The
 // returned handle is how the controller later pushes Tailscale status into
-// the toggle it just built. currentLanguage seeds the language dropdown's
-// initial selection (see languageDropdownLabel) -- the caller re-builds this
-// whole header on every language change (MainWindow.reloadUI ->
-// recreateContainers -> createConnectionAddressBar), so this never needs to
-// change in place after construction.
+// the toggle it just built.
 //
 // This is the desktop-only design for now -- there is no mobile variant of
 // this component yet. When one exists, the choice between them belongs in
 // the caller (createConnectionAddressBar), not inside this component.
-func newConnectionHeader(actions connectionHeaderActions, currentLanguage string) (*fyne.Container, *ConnectionHeaderHandle) {
+func newConnectionHeader(actions connectionHeaderActions) (*fyne.Container, *ConnectionHeaderHandle) {
 	logoLockup := canvas.NewImageFromResource(assets.LogoUSBridgeLockup)
 	logoLockup.FillMode = canvas.ImageFillContain
 	const logoAspectRatio = 951.0 / 236.0
 	const logoHeight = 28
 	logoLockup.SetMinSize(fyne.NewSize(logoHeight*logoAspectRatio, logoHeight))
 
-	// Styled to match the per-connection protocol dropdown's own AUTO/TS/LAN
-	// pill exactly (same border/text/hover colors, size, font) -- same
-	// component (view.HeaderDropdown), just a different option set.
-	langDropdown := view.NewHeaderDropdown([]string{"EN", "ES", "UA"}, languageDropdownLabel(currentLanguage), func(label string) {
-		if actions.OnSelectLanguage != nil {
-			actions.OnSelectLanguage(languageDropdownCode(label))
+	var langBtn *headerStatusBadgeButton
+	langBtn = newHeaderStatusBadgeButton(assets.LanguageIconHeader, func() {
+		if actions.OnShowLanguageMenu != nil {
+			actions.OnShowLanguageMenu(langBtn)
 		}
 	})
-	langDropdown.UltraCompact = true
-	langDropdown.CornerRadius = 6
-	langDropdown.BorderColor = design.ColorTailscaleChipBorder
-	langDropdown.TextColor = design.ColorConnectionBadgeText
-	langDropdown.IconColor = color.NRGBA{R: 0xc5, G: 0xc8, B: 0xb5, A: 0xff}
-	langDropdown.TextSize = 10
-	langDropdown.HoverBorderColor = design.ColorConnectionBadgeText
-	langDropdown.HoverFillColor = design.ColorGray900
+	langBtn.SetBadgeText("")
+	langBtn.SetIconSize(fyne.NewSize(15, 15))
 
 	communityBtn := newHeaderStatusBadgeButton(assets.DiscordIconHeader, func() {
 		if actions.OnOpenCommunity != nil {
@@ -182,10 +141,7 @@ func newConnectionHeader(actions connectionHeaderActions, currentLanguage string
 		tailscaleAccessory,
 		container.NewGridWrap(headerCompactButtonSize, infoBtn),
 		container.NewGridWrap(headerCompactButtonSize, communityBtn),
-		// Not GridWrap'd like the icon-only buttons above -- langDropdown
-		// sizes itself to its own short label text (see HeaderDropdown.
-		// MinSize), not a fixed square.
-		langDropdown,
+		container.NewGridWrap(headerCompactButtonSize, langBtn),
 		container.NewGridWrap(headerCompactButtonSize, loginBtn),
 	)
 

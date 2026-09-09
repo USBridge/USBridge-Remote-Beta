@@ -709,6 +709,14 @@ type StyledMenuOptions struct {
 	Centered  bool
 	Width     float32
 	MaxHeight float32
+	// TextColor/TextSize override each row's default (design.ColorTextLight,
+	// 14) -- nil/0 keeps the default. Used to make a menu read like a
+	// HeaderDropdown's own popup (e.g. the header's language menu wants the
+	// same teal/small-size look the per-connection protocol dropdown's
+	// AUTO/TS/LAN popup already has) without dragging every other
+	// ShowStyledMenu caller's look along with it.
+	TextColor color.Color
+	TextSize  float32
 }
 
 func newDropdownPopup(content fyne.CanvasObject, canvas fyne.Canvas, size fyne.Size, onDismiss func()) *dropdownPopup {
@@ -738,6 +746,18 @@ func ShowStyledMenuCentered(anchor fyne.CanvasObject, items []StyledMenuItem, wi
 	})
 }
 
+// ShowStyledMenuTeal is ShowStyledMenu with rows recolored/resized to match
+// the per-connection protocol dropdown's own AUTO/TS/LAN popup (teal text,
+// design.ColorConnectionBadgeText, at 10px) -- for a menu that should read
+// as "the same style" as that dropdown without becoming one itself (see the
+// header's language menu, gui.ConnectionManager.showLanguageMenu).
+func ShowStyledMenuTeal(anchor fyne.CanvasObject, items []StyledMenuItem) {
+	showStyledMenu(anchor, items, StyledMenuOptions{
+		TextColor: design.ColorConnectionBadgeText,
+		TextSize:  10,
+	})
+}
+
 func showStyledMenu(anchor fyne.CanvasObject, items []StyledMenuItem, options StyledMenuOptions) {
 	if anchor == nil || len(items) == 0 {
 		return
@@ -762,7 +782,14 @@ func showStyledMenu(anchor fyne.CanvasObject, items []StyledMenuItem, options St
 				menuItem.OnTap()
 			}
 		}
-		rows = append(rows, newDropdownItem(menuItem.Label, menuItem.SecondaryLabel, menuItem.Selected, onTap))
+		row := newDropdownItem(menuItem.Label, menuItem.SecondaryLabel, menuItem.Selected, onTap)
+		if options.TextColor != nil {
+			row.textColor = options.TextColor
+		}
+		if options.TextSize > 0 {
+			row.textSize = options.TextSize
+		}
+		rows = append(rows, row)
 		rowCallbacks = append(rowCallbacks, onTap)
 	}
 
@@ -786,11 +813,16 @@ func showStyledMenu(anchor fyne.CanvasObject, items []StyledMenuItem, options St
 		return
 	}
 
+	rowTextSize := float32(14)
+	if options.TextSize > 0 {
+		rowTextSize = options.TextSize
+	}
+
 	menuMin := menu.MinSize()
 	width := menuMin.Width
 	for _, option := range items {
 		label := canvas.NewText(option.Label, design.ColorTextLight)
-		label.TextSize = 14
+		label.TextSize = rowTextSize
 		optionWidth := label.MinSize().Width + 40
 		if optionWidth > width {
 			width = optionWidth

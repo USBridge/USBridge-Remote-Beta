@@ -611,8 +611,8 @@ func newToastCloseButton(onTapped func()) fyne.CanvasObject {
 		Stroke:     color.Transparent,
 		NormalIcon: normalIcon,
 		HoverIcon:  hoverIcon,
-		IconSize:   fyne.NewSize(11, 11),
-		ButtonSize: fyne.NewSize(20, 20),
+		IconSize:   fyne.NewSize(13, 13),
+		ButtonSize: fyne.NewSize(22, 22),
 		OnTapped:   onTapped,
 	})
 }
@@ -637,10 +637,13 @@ func newToastCopyButton(onTapped func()) fyne.CanvasObject {
 // ShowError transforms the toast in place: stops the progress bar, swaps its
 // body for the (word-wrapped) error message -- set in design.SizeNameToastText,
 // the same small size the "Connecting to X…" message it replaces used --
-// turns the border red, and adds a top-right close (X) button plus a small
-// copy-to-clipboard icon button under the message. Must be called from the
-// Fyne goroutine -- every call site in this app already runs inside
-// fyne.Do. A no-op once the toast has been closed.
+// turns the border red, and adds a single top-right row holding a small
+// copy-to-clipboard icon button next to a close (X) button, with the message
+// directly below (nothing after it) -- one action row instead of a close row
+// above and a copy row below, which left dead vertical space at both the
+// top and bottom of the card. Must be called from the Fyne goroutine --
+// every call site in this app already runs inside fyne.Do. A no-op once the
+// toast has been closed.
 func (h *ConnectingToastHandle) ShowError(message string) {
 	if h == nil || h.popup == nil {
 		return
@@ -663,17 +666,16 @@ func (h *ConnectingToastHandle) ShowError(message string) {
 	})
 	errLabel.Wrapping = fyne.TextWrapWord
 
-	closeRow := container.NewHBox(layout.NewSpacer(), newToastCloseButton(h.Close))
-	copyRow := container.NewHBox(layout.NewSpacer(), newToastCopyButton(func() {
+	copyBtn := newToastCopyButton(func() {
 		if h.parent != nil && h.parent.Clipboard() != nil {
 			h.parent.Clipboard().SetContent(message)
 		}
-	}))
+	})
+	actionRow := container.NewHBox(layout.NewSpacer(), copyBtn, newToastCloseButton(h.Close))
 
 	h.body.Objects = []fyne.CanvasObject{
-		closeRow,
+		actionRow,
 		errLabel,
-		copyRow,
 	}
 	h.body.Refresh()
 	// Re-triggers the overlay's own layout pass so the panel resizes/repositions

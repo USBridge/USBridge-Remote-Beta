@@ -77,32 +77,44 @@ var (
 	addConnectionPlusIconHover  = fyne.NewStaticResource("add-device-plus-hover.svg", []byte(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="`+addConnectionCardHoverColorHex+`"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>`))
 )
 
+// addConnectionPlusControlGridSize is NewAddConnectionGridCard's own ring
+// diameter -- newAddConnectionPlusControl's size baseline, and what its icon
+// (18) and stroke (1.5) proportions below are relative to.
+const addConnectionPlusControlGridSize float32 = 48
+
 // newAddConnectionPlusControl builds the same dashed-ring "+" button
 // NewAddConnectionGridCard's own addControl draws (native canvas.Circle
 // ring, the line-only plus glyph above, both swapping to the lime hover
-// colors) -- reused as-is by List mode's zero-items placeholder row (see
-// newConnectionListAddRow) so both entry points into the Add Connection
-// dialog look and behave identically. Unlike the Grid card's version, whose
-// ring/icon react to the whole card's hover (wired externally via
-// spec.OnHover, see NewAddConnectionGridCard's setHovered), this one only
-// ever sits in a table cell with nothing else to hover with, so it drives
-// its own ring/icon recolor off the button's own hover directly.
-func newAddConnectionPlusControl(onAdd func()) fyne.CanvasObject {
+// colors), scaled to ringSize (its icon and stroke width scaled right along
+// with it, off addConnectionPlusControlGridSize) -- reused by List mode's
+// zero-items placeholder row (see newConnectionListAddRow, which passes a
+// smaller size to fit a table row) so both entry points into the Add
+// Connection dialog look and behave identically, just resized. Unlike the
+// Grid card's version, whose ring/icon react to the whole card's hover
+// (wired externally via spec.OnHover, see NewAddConnectionGridCard's
+// setHovered), this one only ever sits in a table cell with nothing else to
+// hover with, so it drives its own ring/icon recolor off the button's own
+// hover directly.
+func newAddConnectionPlusControl(onAdd func(), ringSize float32) fyne.CanvasObject {
+	scale := ringSize / addConnectionPlusControlGridSize
+	iconSize := 18 * scale
+	strokeWidth := 1.5 * scale
+
 	plusImg := canvas.NewImageFromResource(addConnectionPlusIconNormal)
 	plusImg.FillMode = canvas.ImageFillContain
-	plusImg.SetMinSize(fyne.NewSize(18, 18))
+	plusImg.SetMinSize(fyne.NewSize(iconSize, iconSize))
 
 	addRing := canvas.NewCircle(color.Transparent)
 	addRing.StrokeColor = addConnectionCardMutedColor
-	addRing.StrokeWidth = 1.5
-	addRingSized := container.NewGridWrap(fyne.NewSize(48, 48), addRing)
+	addRing.StrokeWidth = strokeWidth
+	addRingSized := container.NewGridWrap(fyne.NewSize(ringSize, ringSize), addRing)
 
 	addBtn := newIconChromeButton(iconChromeButtonSpec{
 		NormalFill:   color.Transparent,
 		HoverFill:    addConnectionCardButtonHoverTint,
 		Stroke:       color.Transparent,
-		CornerRadius: 24, // half of ButtonSize's 48 -> full circle
-		ButtonSize:   fyne.NewSize(48, 48),
+		CornerRadius: ringSize / 2, // full circle
+		ButtonSize:   fyne.NewSize(ringSize, ringSize),
 		OnTapped:     onAdd,
 		OnHover: func(hovered bool) {
 			if hovered {

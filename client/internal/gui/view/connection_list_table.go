@@ -78,7 +78,7 @@ var (
 	// NewAddConnectionGridCard opens its Add Connection dialog with (see
 	// newConnectionListAddRow), not a status dot.
 	connectionListAddOnlyColumnLabels = []string{"", "NAME", "ACTIONS"}
-	connectionListAddOnlyColumnWidths = []float32{56, 0, 150}
+	connectionListAddOnlyColumnWidths = []float32{40, 0, 150}
 )
 
 const connectionListColumnGap float32 = 16
@@ -209,7 +209,10 @@ func buildConnectionsListAddOnlyTable(actions AddConnectionCardActions) fyne.Can
 func newConnectionListAddRow(actions AddConnectionCardActions, widths []float32) fyne.CanvasObject {
 	const addRowLabel = "Add New Connect"
 
-	addCell := container.NewCenter(newAddConnectionPlusControl(actions.OnAdd))
+	// 30 vs. NewAddConnectionGridCard's 48 -- roughly 35% smaller, sized to
+	// fit a table row instead of a full card.
+	const connectionListAddPlusSize float32 = 30
+	addCell := container.NewCenter(newAddConnectionPlusControl(actions.OnAdd, connectionListAddPlusSize))
 
 	title := NewBrandText(addRowLabel, 11, design.ColorTextLight, true)
 	subtitleLine1 := canvas.NewText("Scan a QR code or paste a link", addConnectionCardMutedColor)

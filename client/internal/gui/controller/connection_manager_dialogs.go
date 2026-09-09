@@ -187,6 +187,22 @@ func (e *connectionDialogEntry) TypedKey(k *fyne.KeyEvent) {
 	}
 }
 
+// TypedShortcut is what actually fires for a native OS paste (Ctrl+V):
+// widget.Entry's own paste/cut handling goes through its internal
+// pasteFromClipboard/cutToClipboard, not TypedRune/TypedKey, and calls
+// e.Entry.OnChanged directly -- the embedded field, which this type's own
+// OnChanged (declared above) shadows and which nothing else ever sets. Left
+// unhandled, that meant pasting a link with Ctrl+V silently updated the
+// text but never told anything wired to OnChanged (e.g. the paste view's
+// Apply button enable/disable) -- typing the same text manually worked
+// only because TypedRune/TypedKey above already call the right OnChanged.
+func (e *connectionDialogEntry) TypedShortcut(shortcut fyne.Shortcut) {
+	e.Entry.TypedShortcut(shortcut)
+	if e.OnChanged != nil {
+		e.OnChanged(e.Text)
+	}
+}
+
 func (e *connectionDialogEntry) SetText(text string) {
 	e.Entry.SetText(text)
 	if e.OnChanged != nil {

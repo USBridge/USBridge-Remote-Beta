@@ -83,13 +83,47 @@ cp "$OUTPUT_PATH" "$APPDIR/usr/bin/$EXE_NAME"
 # is an optional accelerator, never a hard dependency of the build.
 echo -e "${YELLOW}Bundling local ui.parse (ONNX Runtime + models) for AI Vision...${NC}"
 ORT_CACHE_DIR="$REPO_ROOT/.build-cache/onnxruntime-linux"
-if [ ! -f "$ORT_CACHE_DIR/libonnxruntime.so" ]; then
+# Also re-fetches a cache dir left over from before fetch_onnxruntime.sh
+# switched to the onnxruntime-openvino wheel on linux (plain libonnxruntime.so
+# present, but none of the OpenVINO EP files it now fetches alongside it) --
+# without this second check, a dev box's pre-existing cache would keep
+# silently shipping CPU-only builds forever, never picking up Intel GPU
+# acceleration despite this script's own logic below now expecting it.
+if [ ! -f "$ORT_CACHE_DIR/libonnxruntime.so" ] || [ ! -f "$ORT_CACHE_DIR/libonnxruntime_providers_openvino.so" ]; then
     "$SCRIPT_DIR/fetch_onnxruntime.sh" "$ORT_CACHE_DIR" linux || true
 fi
 if [ -f "$ORT_CACHE_DIR/libonnxruntime.so" ]; then
     cp -L "$ORT_CACHE_DIR/libonnxruntime.so" "$APPDIR/usr/bin/libonnxruntime.so"
     chmod 755 "$APPDIR/usr/bin/libonnxruntime.so"
     echo -e "${GREEN}✓${NC} usr/bin/libonnxruntime.so"
+    # OpenVINO EP + GPU plugin (Intel iGPU acceleration -- see
+    # fetch_onnxruntime.sh's doc comment): fetch_onnxruntime.sh drops these
+    # next to libonnxruntime.so in the same cache dir for a linux target.
+    # Bundled flat into usr/bin, same as libonnxruntime.so itself -- every
+    # file here ships with RPATH=$ORIGIN (verified via readelf -d against
+    # the wheel's own files), i.e. "look in my own directory", so
+    # linuxdeploy's dependency walk below (which DOES walk every .so it
+    # finds in the AppDir, not just the main executable -- confirmed live
+    # via its own "Deploying dependencies for ELF file .../libonnxruntime_
+    # providers_openvino.so" log line) needs to find providers_openvino.so's
+    # actual DT_NEEDED entries (libopenvino.so.*, libopenvino_onnx_frontend
+    # .so.*, libtbb.so.*) sitting right next to it in order to resolve and
+    # then relocate them -- pre-splitting them into usr/lib ourselves before
+    # that walk runs breaks the walk itself ("ERROR: Could not find
+    # dependency: libopenvino_onnx_frontend.so.2541", confirmed live) rather
+    # than helping it.
+    OV_COUNT=0
+    for f in "$ORT_CACHE_DIR"/libonnxruntime_providers_*.so "$ORT_CACHE_DIR"/libopenvino*.so* "$ORT_CACHE_DIR"/libtbb*.so*; do
+        [ -f "$f" ] || continue
+        cp -L "$f" "$APPDIR/usr/bin/$(basename "$f")"
+        chmod 755 "$APPDIR/usr/bin/$(basename "$f")"
+        OV_COUNT=$((OV_COUNT + 1))
+    done
+    if [ "$OV_COUNT" -gt 0 ]; then
+        echo -e "${GREEN}✓${NC} usr/bin/{providers_openvino,libopenvino*,libtbb*}.so ($OV_COUNT files) -- Intel iGPU acceleration"
+    else
+        echo -e "${YELLOW}⚠${NC} No OpenVINO EP files in $ORT_CACHE_DIR (stale cache from before this build script fetched them?) -- delete $ORT_CACHE_DIR and rebuild to pick them up; AI Vision still works CPU-only until then"
+    fi
 else
     echo -e "${YELLOW}⚠${NC} Could not fetch libonnxruntime.so -- local ui.parse/AI Vision will stay unavailable in this build"
 fi
@@ -130,6 +164,45 @@ if [[ ! -f "$LINUXDEPLOY" ]]; then
     chmod +x "$LINUXDEPLOY"
 fi
 
+# Deploy (no --output yet): populates usr/lib with every .so the bundle's
+# own ELF files DT_NEED (including relocating libopenvino.so.*/
+# libopenvino_onnx_frontend.so.*/libtbb.so.* out of usr/bin, per
+# libonnxruntime_providers_openvino.so's own DT_NEEDED entries -- see this
+# script's own comment above) and rewrites their RPATHs to match.
+echo -e "${YELLOW}Deploying dependencies...${NC}"
+ARCH=x86_64 "$LINUXDEPLOY" \
+    --appdir "$APPDIR" \
+    --executable "$APPDIR/usr/bin/$EXE_NAME" \
+    --desktop-file "$APPDIR/$EXE_NAME.desktop" \
+    --icon-file "$APPDIR/$EXE_NAME.png" 2>&1
+
+# libopenvino_intel_gpu_plugin.so is never a static ELF dependency of
+# anything (OpenVINO dlopen's it by convention, only once
+# AppendExecutionProviderOpenVINO's device_type=GPU request actually runs),
+# so the deploy step above never touches it -- it's still sitting in
+# usr/bin where it was originally bundled, while libopenvino.so.* just got
+# relocated to usr/lib. OpenVINO's own plugin discovery looks in
+# libopenvino.so's directory, not the main executable's, so it has to move
+# alongside it or the GPU EP fails to init at runtime with "[OpenVINO]
+# Device GPU is not available" (confirmed live) despite every library
+# technically being present in the bundle. Whichever directory
+# libopenvino.so.* actually ended up in above (usr/lib today, but this
+# tracks it rather than hardcoding that) is where this has to land too.
+GPU_PLUGIN_SRC="$APPDIR/usr/bin/libopenvino_intel_gpu_plugin.so"
+if [ -f "$GPU_PLUGIN_SRC" ]; then
+    OV_CORE_LIB="$(find "$APPDIR/usr/lib" -maxdepth 1 -name 'libopenvino.so.*' -print -quit)"
+    if [ -n "$OV_CORE_LIB" ]; then
+        OV_LIB_DIR="$(dirname "$OV_CORE_LIB")"
+        if [ "$OV_LIB_DIR" != "$(dirname "$GPU_PLUGIN_SRC")" ]; then
+            cp -L "$GPU_PLUGIN_SRC" "$OV_LIB_DIR/libopenvino_intel_gpu_plugin.so"
+            chmod 755 "$OV_LIB_DIR/libopenvino_intel_gpu_plugin.so"
+            echo -e "${GREEN}✓${NC} $(realpath --relative-to="$APPDIR" "$OV_LIB_DIR")/libopenvino_intel_gpu_plugin.so (colocated with libopenvino.so for OpenVINO's own plugin discovery)"
+        fi
+    else
+        echo -e "${YELLOW}⚠${NC} libopenvino.so.* not found under usr/lib after deploy -- Intel GPU acceleration may not initialize at runtime"
+    fi
+fi
+
 # Build AppImage
 echo -e "${YELLOW}Packaging AppImage...${NC}"
 OUTPUT_APPIMAGE="$REPO_ROOT/dist/USBridgeClient-Linux-x86_64-${VERSION}.AppImage"
@@ -137,9 +210,6 @@ rm -f "$OUTPUT_APPIMAGE"
 
 ARCH=x86_64 "$LINUXDEPLOY" \
     --appdir "$APPDIR" \
-    --executable "$APPDIR/usr/bin/$EXE_NAME" \
-    --desktop-file "$APPDIR/$EXE_NAME.desktop" \
-    --icon-file "$APPDIR/$EXE_NAME.png" \
     --output appimage 2>&1
 
 # linuxdeploy writes the AppImage to cwd — move it to dist/

@@ -15,7 +15,6 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/driver/desktop"
-	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 )
@@ -575,6 +574,24 @@ func (h *ConnectingToastHandle) Close() {
 	})
 }
 
+// toastTextPaddingTheme shrinks theme.SizeNameInnerPadding for the error
+// toast's message. widget.RichText always reserves a full innerPadding gap
+// (8px by default) on every side of its text as "standard padding" (see its
+// own MinSize doc comment) -- independent of any outer inset this file adds
+// around it, that reads as a large empty gap above/below the message on a
+// card this small. This keeps just enough room to avoid clipping descenders
+// while trimming the rest.
+type toastTextPaddingTheme struct {
+	fyne.Theme
+}
+
+func (t toastTextPaddingTheme) Size(name fyne.ThemeSizeName) float32 {
+	if name == theme.SizeNameInnerPadding {
+		return 2
+	}
+	return t.Theme.Size(name)
+}
+
 // toastCloseIconColor/toastCloseIconHoverColor are the error toast's close
 // (X) glyph tint -- deliberately chromeless (see newToastCloseButton's
 // NormalFill/HoverFill: color.Transparent) so only the glyph itself, not a
@@ -671,11 +688,17 @@ func (h *ConnectingToastHandle) ShowError(message string) {
 			h.parent.Clipboard().SetContent(message)
 		}
 	})
-	actionRow := container.NewHBox(layout.NewSpacer(), copyBtn, newToastCloseButton(h.Close))
+	// titleText fills the header row's otherwise-empty left side (the
+	// buttons alone read as floating with nothing to anchor them) --
+	// small/left-aligned, not the app's usual 19px dialog-title size, since
+	// this toast is a small card, not a modal.
+	titleText := NewBrandText(i18n.Current.Error, 10, design.ColorDanger, true)
+	buttonsRow := container.NewHBox(copyBtn, newToastCloseButton(h.Close))
+	headerRow := container.NewBorder(nil, nil, titleText, buttonsRow)
 
 	h.body.Objects = []fyne.CanvasObject{
-		actionRow,
-		errLabel,
+		headerRow,
+		container.NewThemeOverride(errLabel, toastTextPaddingTheme{Theme: design.NewBrandTheme()}),
 	}
 	h.body.Refresh()
 	// Re-triggers the overlay's own layout pass so the panel resizes/repositions
@@ -712,7 +735,7 @@ func ShowConnectingToast(message string, maxDuration time.Duration, parent fyne.
 	bar := newConnectingProgressBar()
 
 	body := container.NewVBox(
-		NewInset(text, 0, 0, 2, 4),
+		NewInset(text, 0, 0, 0, 4),
 		bar,
 	)
 
@@ -726,7 +749,7 @@ func ShowConnectingToast(message string, maxDuration time.Duration, parent fyne.
 
 	panel := container.NewStack(
 		bg,
-		NewInset(body, 9, 9, 6, 6),
+		NewInset(body, 9, 9, 4, 4),
 		border,
 	)
 
